@@ -5,6 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "metar-cli"
 version = "0.3.0"
+authors = [
+  {name = "Alex gc"}
+]
 description = "Terminal METAR + TAF dashboard for pilots and aviation nerds"
 requires-python = ">=3.10"
 dependencies = [
@@ -12,6 +15,17 @@ dependencies = [
     "requests",
     "prompt_toolkit",
 ]
+license = {text = "MIT"}
+classifiers = [
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Environment :: Console",
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+]
+
+[project.urls]
+Repository = "https://github.com/alexgc96/metar-cli"
 
 [project.scripts]
 metar = "metar:main"
