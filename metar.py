@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""aviation-cli — METAR + TAF terminal dashboard"""
+"""metar-cli — METAR + TAF terminal dashboard"""
 
 import argparse
 import os
@@ -657,7 +657,7 @@ def _icao_dialog(title, subtitle, label, hint, border_color="#00aaff", error=Non
 
 def search_prompt(error=None):
     return _icao_dialog(
-        title="✈  aviation-cli",
+        title="✈  metar-cli",
         subtitle="METAR + TAF  ·  terminal dashboard",
         label="input station",
         hint="enter ↵ to search   ctrl+c to quit",
