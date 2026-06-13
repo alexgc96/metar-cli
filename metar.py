@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""aviation-cli — METAR terminal dashboard"""
+"""aviation-cli — METAR + TAF terminal dashboard"""
 
+import argparse
 import sys
 import requests
 from datetime import datetime, timezone, timedelta
@@ -9,11 +10,12 @@ from rich.text import Text
 from rich.panel import Panel
 from rich.table import Table
 from rich.columns import Columns
-from rich import box
 
 console = Console()
 DEFAULT_ICAO = "MMML"
 METAR_URL = "https://aviationweather.gov/api/data/metar"
+TAF_URL   = "https://aviationweather.gov/api/data/taf"
+ASOS_URL  = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
 
 FR_STYLES = {
     "VFR":  ("green",   "bold white on green"),
@@ -22,7 +24,6 @@ FR_STYLES = {
     "LIFR": ("magenta", "bold white on magenta"),
 }
 
-# 3x3 compass — active arrow highlighted, rest dimmed
 ROSE_GRID = [
     ["↖", "↑", "↗"],
     ["←", "·", "→"],
@@ -33,9 +34,19 @@ ROSE_POS = {
     "S":  (2, 1), "SW": (2, 0), "W":  (1, 0), "NW": (0, 0),
 }
 
+CHANGE_STYLES = {
+    "FM":     "bold cyan",
+    "BECMG":  "bold yellow",
+    "TEMPO":  "bold magenta",
+    "PROB30": "dim magenta",
+    "PROB40": "dim magenta",
+}
+
+
 def deg_to_cardinal(deg):
     dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
     return dirs[round(float(deg) / 45) % 8]
+
 
 def render_rose(wdir, wspd, color):
     active = ROSE_POS[deg_to_cardinal(wdir)] if wdir and wspd > 0 else None
@@ -50,7 +61,9 @@ def render_rose(wdir, wspd, color):
             t.append("\n")
     return t
 
+
 SPARKS = "▁▂▃▄▅▆▇█"
+
 
 def sparkline(values):
     clean = [v for v in values if v is not None]
@@ -64,9 +77,8 @@ def sparkline(values):
         for v in values
     )
 
-ASOS_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
 
-def fetch(icao):
+def fetch_metar(icao):
     resp = requests.get(METAR_URL, params={"ids": icao, "format": "json"}, timeout=10)
     resp.raise_for_status()
     data = resp.json()
@@ -74,6 +86,14 @@ def fetch(icao):
         console.print(f"[red]No METAR data for {icao}[/red]")
         sys.exit(1)
     return data[0]
+
+
+def fetch_taf(icao):
+    resp = requests.get(TAF_URL, params={"ids": icao, "format": "json"}, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    return data[0] if data else None
+
 
 def fetch_history(icao, hours=6):
     now   = datetime.now(tz=timezone.utc)
@@ -85,7 +105,7 @@ def fetch_history(icao, hours=6):
         "tz": "UTC", "format": "onlycomma", "latlon": "no", "missing": "null",
     }, timeout=10)
     records = []
-    for line in resp.text.strip().splitlines()[1:]:   # skip header
+    for line in resp.text.strip().splitlines()[1:]:
         parts = line.split(",")
         if len(parts) < 6:
             continue
@@ -102,6 +122,7 @@ def fetch_history(icao, hours=6):
             continue
     return records
 
+
 def age_str(obs_time):
     try:
         dt = datetime.fromtimestamp(int(obs_time), tz=timezone.utc)
@@ -110,14 +131,25 @@ def age_str(obs_time):
     except Exception:
         return ""
 
+
+def fmt_time(ts):
+    try:
+        dt = datetime.fromtimestamp(int(ts), tz=timezone.utc)
+        return dt.strftime("%d/%Hz")
+    except Exception:
+        return "??Z"
+
+
 def get_ceiling(clouds):
     for layer in (clouds or []):
         if layer.get("cover") in ("BKN", "OVC"):
             return f"{layer['base']:,} ft"
     return "None"
 
+
 def hpa_to_inhg(hpa):
     return f"{float(hpa) * 0.02953:.2f}"
+
 
 def render_history(history):
     if len(history) < 2:
@@ -126,27 +158,102 @@ def render_history(history):
     winds = [r.get("wspd") for r in history]
     inhgs = [r.get("inhg") for r in history]
 
-    def range_label(vals, fmt, unit):
+    def cell(label, vals, spark_style, fmt, unit):
         clean = [v for v in vals if v is not None]
-        if not clean:
-            return ""
-        return f"  {fmt.format(min(clean))}→{fmt.format(max(clean))} {unit}"
+        t = Text()
+        t.append(f"{label}  ", style="dim")
+        t.append(sparkline(vals), style=f"bold {spark_style}")
+        if clean:
+            t.append(f"  {fmt.format(min(clean))}→{fmt.format(max(clean))} {unit}", style=f"dim {spark_style}")
+        return t
+
+    tbl = Table(box=None, show_header=False, padding=(0, 3), expand=False)
+    tbl.add_column()
+    tbl.add_column()
+    tbl.add_column()
+    tbl.add_row(
+        cell("temp", temps, "yellow", "{:.0f}", "°C"),
+        cell("wind", winds, "cyan",   "{:.0f}", "kt"),
+        cell("QNH",  inhgs, "white",  "{:.2f}", "inHg"),
+    )
+    return tbl
+
+
+def parse_iso(iso_str):
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        mins = int((datetime.now(tz=timezone.utc) - dt).total_seconds() / 60)
+        return f"{mins}m ago"
+    except Exception:
+        return ""
+
+
+def render_taf(taf):
+    if not taf:
+        return
+
+    valid_from = fmt_time(taf.get("validTimeFrom", 0))
+    valid_to   = fmt_time(taf.get("validTimeTo", 0))
+    issued     = parse_iso(taf.get("issueTime", ""))
 
     t = Text()
-    t.append("temp  ", style="dim"); t.append(sparkline(temps), style="bold yellow")
-    t.append(range_label(temps, "{:.0f}", "°C"), style="dim yellow"); t.append("\n")
+    t.append(f"valid {valid_from} → {valid_to}", style="dim white")
+    t.append(f"   issued {issued}\n\n", style="dim cyan")
 
-    t.append("wind  ", style="dim"); t.append(sparkline(winds), style="bold cyan")
-    t.append(range_label(winds, "{:.0f}", "kt"), style="dim cyan"); t.append("\n")
+    for period in taf.get("fcsts", []):
+        change = period.get("fcstChange") or "BASE"
+        time_from = fmt_time(period.get("timeFrom", 0))
+        time_to   = fmt_time(period.get("timeTo", 0))
 
-    t.append("QNH   ", style="dim"); t.append(sparkline(inhgs), style="bold white")
-    t.append(range_label(inhgs, "{:.2f}", "inHg"), style="dim white")
-    return t
+        label_style = CHANGE_STYLES.get(change, "bold white")
 
-def main():
-    icao = sys.argv[1].upper() if len(sys.argv) > 1 else DEFAULT_ICAO
+        t.append(f"{change:<6} ", style=label_style)
+        t.append(f"{time_from}→{time_to}  ", style="dim")
 
-    m       = fetch(icao)
+        wdir = period.get("wdir")
+        wspd = period.get("wspd") or 0
+        wgst = period.get("wgst")
+        if wspd == 0 or wspd is None:
+            t.append("Calm  ", style="cyan")
+        else:
+            t.append(f"{int(wspd)}", style="bold cyan")
+            if wgst:
+                t.append(f"G{int(wgst)}", style="bold red")
+            t.append("kt", style="cyan")
+            if wdir is not None:
+                card = deg_to_cardinal(wdir)
+                t.append(f" {int(wdir)}°{card}", style="dim cyan")
+            t.append("  ")
+
+        vis = period.get("visib")
+        if vis is not None:
+            t.append(f"{vis}SM  ", style="white")
+
+        clouds = period.get("clouds") or []
+        for c in clouds:
+            cover = c.get("cover", "")
+            base  = c.get("base")
+            if cover == "SKC" or cover == "CLR":
+                t.append("SKC  ", style="dim")
+            elif base is not None:
+                t.append(f"{cover} {base:,}ft  ", style="dim white")
+
+        wx = period.get("wxString")
+        if wx:
+            t.append(wx, style="bold yellow")
+
+        t.append("\n")
+
+    raw = taf.get("rawTAF", "")
+    if raw:
+        t.append("\n")
+        t.append(raw, style="dim white")
+
+    console.print(Panel(t, title="[dim]TAF[/dim]", border_style="dim"))
+
+
+def show_station(icao, show_taf=False, raw_only=False):
+    m       = fetch_metar(icao)
     history = fetch_history(icao)
 
     fr     = m.get("flightCategory", "VFR")
@@ -162,6 +269,10 @@ def main():
     raw    = m.get("rawOb", "")
     name   = m.get("name", "")
     obs    = m.get("obsTime", 0)
+
+    if raw_only:
+        console.print(raw)
+        return
 
     fr_color, fr_style = FR_STYLES.get(fr, ("white", "bold white"))
 
@@ -179,38 +290,29 @@ def main():
     for _ in range(6):
         stats.add_column(justify="center")
 
-    # Flight rules
     fr_cell = Text(f" {fr} ", style=fr_style)
 
-    # Temp / dew
     temp_cell = Text()
     if temp is not None:
         temp_cell.append(f"{int(temp)}°C", style="bold yellow")
         if dewp is not None:
             temp_cell.append(f" / {int(dewp)}°", style="dim yellow")
 
-    # Wind
     wind_val = Text()
+    wind_sub = Text("")
     if not wspd or wspd == 0:
         wind_val.append("Calm", style="bold cyan")
-        wind_sub = Text("", style="dim")
     else:
         wind_val.append(f"{int(wspd)}", style="bold cyan")
         if wgst:
             wind_val.append(f"G{int(wgst)}", style="bold red")
         wind_val.append("kt", style="cyan")
         wind_val.append(f"  {int(wdir)}°", style="dim cyan")
-        card = deg_to_cardinal(wdir)
-        wind_sub = Text(card, style="dim")
+        wind_sub = Text(deg_to_cardinal(wdir), style="dim")
 
-    # Visibility
-    vis_cell = Text(f"{visib} mi", style="bold white")
-
-    # Ceiling
+    vis_cell  = Text(f"{visib} mi", style="bold white")
     ceil_cell = Text(get_ceiling(clouds), style="bold white")
-
-    # QNH
-    qnh_cell = Text(f"{hpa_to_inhg(altim)} inHg" if altim else "—", style="bold white")
+    qnh_cell  = Text(f"{hpa_to_inhg(altim)} inHg" if altim else "—", style="bold white")
 
     stats.add_row(fr_cell, temp_cell, wind_val, vis_cell, ceil_cell, qnh_cell)
     stats.add_row(
@@ -242,7 +344,6 @@ def main():
     clouds_text.append("    └" + "─" * 12, style="dim")
 
     clouds_panel = Panel(clouds_text, title="[dim]clouds[/dim]", width=22, border_style="dim")
-
     console.print(Columns([rose_panel, clouds_panel]))
     console.rule(style="dim white")
 
@@ -254,6 +355,33 @@ def main():
 
     # ── Raw METAR ────────────────────────────────────────────────────────
     console.print(Panel(Text(raw, style="dim white"), title="[dim]raw[/dim]", border_style="dim"))
+
+    # ── TAF ──────────────────────────────────────────────────────────────
+    if show_taf:
+        console.rule(style="dim white")
+        taf = fetch_taf(icao)
+        render_taf(taf)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="metar",
+        description="Aviation weather dashboard — METAR + TAF",
+    )
+    parser.add_argument(
+        "icao", nargs="*", default=[DEFAULT_ICAO],
+        metavar="ICAO", help="One or more ICAO station codes (default: MMML)",
+    )
+    parser.add_argument("--taf", action="store_true", help="Include TAF forecast block")
+    parser.add_argument("--raw", action="store_true", help="Print raw METAR string only")
+    args = parser.parse_args()
+
+    stations = [s.upper() for s in args.icao]
+    for i, icao in enumerate(stations):
+        if i > 0:
+            console.print()
+        show_station(icao, show_taf=args.taf, raw_only=args.raw)
+
 
 if __name__ == "__main__":
     main()
