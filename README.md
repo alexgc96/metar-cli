@@ -99,6 +99,9 @@ Full-screen ICAO search box. Once a station is loaded:
 |`c`|Set default station    |
 |`q`|Quit                   |
 
+<img width="381" height="361" alt="Screen Shot 2026-06-13 at 6 21 00" src="https://github.com/user-attachments/assets/a4fb8691-968b-44ea-84ef-11f6e35c19fb" />
+<img width="470" height="363" alt="Screen Shot 2026-06-13 at 6 21 27" src="https://github.com/user-attachments/assets/a0acf129-39c9-4cff-8568-864ccc46e10e" />
+
 -----
 
 ## Data sources
