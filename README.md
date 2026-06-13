@@ -33,8 +33,8 @@ METAR MMML  ·  Mexicali Intl, BC, MX   12m ago
 ## Install
 
 ```bash
-git clone https://github.com/yourusername/aviation-cli.git
-cd aviation-cli
+git clone https://github.com/alexgc96/metar-cli.git
+cd metar-cli
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
@@ -55,7 +55,7 @@ metar --set-default KJFK   # save a new default station
 To use `metar` outside the venv, add the venv's bin to your PATH in `~/.zshrc` or `~/.bashrc`:
 
 ```bash
-export PATH="/path/to/aviation-cli/.venv/bin:$PATH"
+export PATH="/path/to/metar-cli/.venv/bin:$PATH"
 ```
 
 ---
