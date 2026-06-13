@@ -1,0 +1,8 @@
+metar.py
+pyproject.toml
+aviation_cli.egg-info/PKG-INFO
+aviation_cli.egg-info/SOURCES.txt
+aviation_cli.egg-info/dependency_links.txt
+aviation_cli.egg-info/entry_points.txt
+aviation_cli.egg-info/requires.txt
+aviation_cli.egg-info/top_level.txt

@@ -1,0 +1,2 @@
+[console_scripts]
+metar = metar:main

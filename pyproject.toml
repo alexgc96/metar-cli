@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aviation-cli"
+version = "0.3.0"
+description = "Terminal METAR + TAF dashboard for pilots and aviation nerds"
+requires-python = ">=3.10"
+dependencies = [
+    "rich",
+    "requests",
+    "prompt_toolkit",
+]
+
+[project.scripts]
+metar = "metar:main"
+
+[tool.setuptools]
+py-modules = ["metar"]

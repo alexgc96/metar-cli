@@ -2,9 +2,14 @@
 """aviation-cli — METAR + TAF terminal dashboard"""
 
 import argparse
+import os
+import re
 import sys
+import termios
+import tty
 import requests
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from rich.console import Console
 from rich.text import Text
 from rich.panel import Panel
@@ -12,7 +17,24 @@ from rich.table import Table
 from rich.columns import Columns
 
 console = Console()
-DEFAULT_ICAO = "MMML"
+CONFIG_FILE = Path.home() / ".config" / "metar" / "config"
+FALLBACK_ICAO = "MMML"
+
+
+def get_default_icao():
+    if icao := os.environ.get("METAR_ICAO"):
+        return icao.upper()
+    if CONFIG_FILE.exists():
+        val = CONFIG_FILE.read_text().strip()
+        if val:
+            return val.upper()
+    return FALLBACK_ICAO
+
+
+def set_default_icao(icao):
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(icao.upper() + "\n")
+    console.print(f"Default station set to [bold]{icao.upper()}[/bold]  ({CONFIG_FILE})")
 METAR_URL = "https://aviationweather.gov/api/data/metar"
 TAF_URL   = "https://aviationweather.gov/api/data/taf"
 ASOS_URL  = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
@@ -83,8 +105,7 @@ def fetch_metar(icao):
     resp.raise_for_status()
     data = resp.json()
     if not data:
-        console.print(f"[red]No METAR data for {icao}[/red]")
-        sys.exit(1)
+        raise ValueError(f"No METAR data for {icao}")
     return data[0]
 
 
@@ -147,22 +168,94 @@ def get_ceiling(clouds):
     return "None"
 
 
+_WX_INTENSITY  = {"-": "light", "+": "heavy"}
+_WX_DESCRIPTOR = {
+    "TS": "thunderstorm", "FZ": "freezing", "BL": "blowing",
+    "DR": "drifting",     "BC": "patchy",   "MI": "shallow",
+    "PR": "partial",      "SH": None,  # handled as suffix "showers"
+}
+_WX_PHENOM = {
+    "DZ": "drizzle",  "RA": "rain",    "SN": "snow",   "SG": "snow grains",
+    "IC": "ice",      "PL": "pellets", "GR": "hail",   "GS": "small hail",
+    "UP": "precip",   "BR": "mist",    "FG": "fog",    "FU": "smoke",
+    "VA": "ash",      "DU": "dust",    "SA": "sand",   "HZ": "haze",
+    "PY": "spray",    "PO": "dust whirls", "SQ": "squalls",
+    "FC": "funnel cloud", "SS": "sandstorm", "DS": "duststorm",
+}
+
+def _decode_wx_token(tok):
+    i = 0
+    nearby = False
+    intensity = ""
+    descs = []
+    phenom = []
+
+    if tok[i:i+2] == "VC":
+        nearby = True
+        i += 2
+
+    if i < len(tok) and tok[i] in "-+":
+        intensity = _WX_INTENSITY[tok[i]]
+        i += 1
+
+    while i + 1 < len(tok) + 1:
+        code = tok[i:i+2]
+        if not code:
+            break
+        if code in _WX_DESCRIPTOR:
+            descs.append(code)
+            i += 2
+        elif code in _WX_PHENOM:
+            phenom.append(_WX_PHENOM[code])
+            i += 2
+        else:
+            i += 1
+
+    words = []
+    if intensity:
+        words.append(intensity)
+    for d in ("TS", "FZ", "BL", "DR", "BC", "MI", "PR"):
+        if d in descs:
+            words.append(_WX_DESCRIPTOR[d])
+    words.extend(phenom)
+    if "SH" in descs:
+        words.append("showers")
+    if nearby:
+        words.append("nearby")
+    return " ".join(words)
+
+
+def decode_wx(wx_str):
+    if not wx_str:
+        return ""
+    return "  ·  ".join(_decode_wx_token(t) for t in wx_str.split() if t)
+
+
 def hpa_to_inhg(hpa):
     return f"{float(hpa) * 0.02953:.2f}"
+
+
+MAX_SPARK_POINTS = 12
+
+def _sample(values, n=MAX_SPARK_POINTS):
+    if len(values) <= n:
+        return values
+    step = len(values) / n
+    return [values[round(i * step)] for i in range(n)]
 
 
 def render_history(history):
     if len(history) < 2:
         return None
-    temps = [r.get("temp") for r in history]
-    winds = [r.get("wspd") for r in history]
-    inhgs = [r.get("inhg") for r in history]
+    all_temps = [r.get("temp") for r in history]
+    all_winds = [r.get("wspd") for r in history]
+    all_inhgs = [r.get("inhg") for r in history]
 
-    def cell(label, vals, spark_style, fmt, unit):
-        clean = [v for v in vals if v is not None]
+    def cell(label, all_vals, spark_style, fmt, unit):
+        clean = [v for v in all_vals if v is not None]
         t = Text()
         t.append(f"{label}  ", style="dim")
-        t.append(sparkline(vals), style=f"bold {spark_style}")
+        t.append(sparkline(_sample(all_vals)), style=f"bold {spark_style}")
         if clean:
             t.append(f"  {fmt.format(min(clean))}→{fmt.format(max(clean))} {unit}", style=f"dim {spark_style}")
         return t
@@ -172,9 +265,9 @@ def render_history(history):
     tbl.add_column()
     tbl.add_column()
     tbl.add_row(
-        cell("temp", temps, "yellow", "{:.0f}", "°C"),
-        cell("wind", winds, "cyan",   "{:.0f}", "kt"),
-        cell("QNH",  inhgs, "white",  "{:.2f}", "inHg"),
+        cell("temp", all_temps, "yellow", "{:.0f}", "°C"),
+        cell("wind", all_winds, "cyan",   "{:.0f}", "kt"),
+        cell("QNH",  all_inhgs, "white",  "{:.2f}", "inHg"),
     )
     return tbl
 
@@ -220,7 +313,9 @@ def render_taf(taf):
             if wgst:
                 t.append(f"G{int(wgst)}", style="bold red")
             t.append("kt", style="cyan")
-            if wdir is not None:
+            if wdir == "VRB":
+                t.append(" VRB", style="dim cyan")
+            elif wdir is not None:
                 card = deg_to_cardinal(wdir)
                 t.append(f" {int(wdir)}°{card}", style="dim cyan")
             t.append("  ")
@@ -252,11 +347,96 @@ def render_taf(taf):
     console.print(Panel(t, title="[dim]TAF[/dim]", border_style="dim"))
 
 
+def density_alt(temp_c, altim_hpa, elev_m):
+    elev_ft     = elev_m * 3.28084
+    altim_inhg  = altim_hpa * 0.02953
+    pa          = (29.92 - altim_inhg) * 1000 + elev_ft
+    isa_temp    = 15.0 - (1.98 * pa / 1000)
+    return round(pa + 120 * (temp_c - isa_temp))
+
+
+def parse_remarks(raw):
+    if "RMK" not in raw:
+        return []
+    rmk = raw.split("RMK", 1)[1].strip()
+    items = []
+    tokens = rmk.split()
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+
+        m = re.match(r'^SLP(\d{3})$', tok)
+        if m:
+            v = int(m.group(1))
+            hpa = (1000 + v / 10) if v < 500 else (900 + v / 10)
+            items.append(("SLP", f"{hpa:.1f} hPa"))
+
+        elif re.match(r'^T[01]\d{3}[01]\d{3}$', tok):
+            ts, ds = tok[1:5], tok[5:]
+            tv = int(ts[1:]) / 10 * (-1 if ts[0] == "1" else 1)
+            dv = int(ds[1:]) / 10 * (-1 if ds[0] == "1" else 1)
+            items.append(("T/Td", f"{tv:.1f}° / {dv:.1f}°"))
+
+        elif tok == "AO2":
+            items.append(("stn", "ASOS / auto"))
+        elif tok == "AO1":
+            items.append(("stn", "auto (no precip ID)"))
+
+        elif tok == "PK" and i + 2 < len(tokens) and tokens[i + 1] == "WND":
+            m2 = re.match(r'^(\d{3})(\d{2,3})/(\d{4})$', tokens[i + 2])
+            if m2:
+                items.append(("pk wind", f"{m2.group(2)}kt {m2.group(1)}° :{m2.group(3)[2:]}"))
+                i += 2
+
+        elif tok == "WSHFT" and i + 1 < len(tokens):
+            t_str = tokens[i + 1]
+            items.append(("wshft", f":{t_str[2:]}"))
+            i += 1
+
+        elif tok == "PRESRR":
+            items.append(("pres Δ", "rising rapidly"))
+        elif tok == "PRESFR":
+            items.append(("pres Δ", "falling rapidly"))
+
+        elif re.match(r'^P\d{4}$', tok):
+            v = int(tok[1:])
+            items.append(("precip", "trace" if v == 0 else f"{v / 100:.2f} in"))
+
+        elif re.match(r'^6\d{4}$', tok):
+            v = int(tok[1:])
+            items.append(("6h precip", "trace" if v == 0 else f"{v / 100:.2f} in"))
+
+        elif tok == "TSNO":
+            items.append(("TS sensor", "N/A"))
+        elif tok == "RVRNO":
+            items.append(("RVR", "N/A"))
+        elif tok == "FZRANO":
+            items.append(("FZRA sensor", "N/A"))
+        elif tok == "PWINO":
+            items.append(("precip ID", "N/A"))
+
+        elif tok == "$":
+            items.append(("maint", "check needed"))
+
+        i += 1
+    return items
+
+
+def render_analysis_panel(rmk_items):
+    t = Text()
+    for label, val in rmk_items:
+        t.append(f"{label:<10}", style="dim")
+        t.append(val + "\n", style="white")
+    if not rmk_items:
+        t.append("no remarks", style="dim")
+    return Panel(t, title="[dim]remarks[/dim]", border_style="dim")
+
+
 def show_station(icao, show_taf=False, raw_only=False):
     m       = fetch_metar(icao)
     history = fetch_history(icao)
 
-    fr     = m.get("flightCategory", "VFR")
+    fr     = m.get("fltCat") or m.get("flightCategory", "VFR")
     temp   = m.get("temp")
     dewp   = m.get("dewp")
     wdir   = m.get("wdir")
@@ -264,6 +444,7 @@ def show_station(icao, show_taf=False, raw_only=False):
     wgst   = m.get("wgst")
     visib  = m.get("visib", "—")
     altim  = m.get("altim")
+    elev   = m.get("elev")
     clouds = m.get("clouds", [])
     wx     = m.get("wxString") or ""
     raw    = m.get("rawOb", "")
@@ -317,7 +498,7 @@ def show_station(icao, show_taf=False, raw_only=False):
     stats.add_row(fr_cell, temp_cell, wind_val, vis_cell, ceil_cell, qnh_cell)
     stats.add_row(
         Text(""),
-        Text(wx or "Clear", style="dim"),
+        Text(decode_wx(wx) or "clear", style="dim"),
         wind_sub if wspd else Text(""),
         Text("Visibility", style="dim"),
         Text("Ceiling", style="dim"),
@@ -329,22 +510,40 @@ def show_station(icao, show_taf=False, raw_only=False):
 
     # ── Wind rose + cloud layers side by side ────────────────────────────
     rose_text = render_rose(wdir, wspd, fr_color)
-    rose_panel = Panel(rose_text, title="[dim]wind[/dim]", width=13, border_style="dim")
+    if temp is not None and altim and elev is not None:
+        da = density_alt(temp, altim, elev)
+        da_style = "bold green" if da < 3000 else ("bold yellow" if da < 5000 else "bold red")
+        elev_ft = round(elev * 3.28084)
+        rose_text.append("\n──────\n", style="dim")
+        rose_text.append("elev  ", style="dim")
+        rose_text.append(f"{elev_ft:,}ft\n", style="white")
+        rose_text.append("DA    ", style="dim")
+        rose_text.append(f"{da:,}ft", style=da_style)
+    rose_panel = Panel(rose_text, title="[dim]wind[/dim]", width=18, border_style="dim")
 
     clouds_text = Text()
-    altitudes = [20000, 15000, 12000, 9000, 6000, 3000, 0]
-    cloud_map = {int(c["base"]): c["cover"] for c in (clouds or [])}
+    altitudes  = [20000, 12000, 6000, 3000, 1500, 500, 0]
+    alt_labels = {20000: "20k", 12000: "12k", 6000: " 6k",
+                  3000:  " 3k", 1500:  "1.5", 500:  "500", 0: "sfc"}
+    cloud_rows: dict = {}
+    for c in (clouds or []):
+        base = c.get("base")
+        if base is None:
+            continue
+        nearest = min(altitudes, key=lambda a: abs(a - base))
+        cloud_rows.setdefault(nearest, []).append(c["cover"])
     for alt in altitudes:
-        label = f"{alt//1000:>2}k" if alt > 0 else " 0 "
-        clouds_text.append(f"{label} │ ", style="dim")
-        match = next((cov for base, cov in cloud_map.items() if abs(base - alt) < 1500), None)
-        if match:
-            clouds_text.append(f"☁ {match}", style="bold white")
+        clouds_text.append(f"{alt_labels[alt]} │ ", style="dim")
+        for cover in cloud_rows.get(alt, []):
+            clouds_text.append(f"☁ {cover}", style="bold white")
         clouds_text.append("\n")
     clouds_text.append("    └" + "─" * 12, style="dim")
 
     clouds_panel = Panel(clouds_text, title="[dim]clouds[/dim]", width=22, border_style="dim")
-    console.print(Columns([rose_panel, clouds_panel]))
+
+    rmk_items      = parse_remarks(raw)
+    analysis_panel = render_analysis_panel(rmk_items)
+    console.print(Columns([rose_panel, clouds_panel, analysis_panel]))
     console.rule(style="dim white")
 
     # ── Sparkline history ────────────────────────────────────────────────
@@ -363,20 +562,197 @@ def show_station(icao, show_taf=False, raw_only=False):
         render_taf(taf)
 
 
+def getch():
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        return sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _icao_dialog(title, subtitle, label, hint, border_color="#00aaff", error=None):
+    from prompt_toolkit import Application
+    from prompt_toolkit.buffer import Buffer
+    from prompt_toolkit.formatted_text import HTML
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.layout import Layout
+    from prompt_toolkit.layout.containers import HSplit, VSplit, Window, WindowAlign
+    from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
+    from prompt_toolkit.widgets import Frame
+    from prompt_toolkit.styles import Style
+
+    result = [None]
+    buf = Buffer()
+
+    kb = KeyBindings()
+
+    @kb.add("enter")
+    def _(event):
+        val = buf.text.strip().upper()
+        if val:
+            result[0] = val
+        event.app.exit()
+
+    @kb.add("c-c")
+    @kb.add("c-d")
+    def _(event):
+        event.app.exit()
+
+    def row(content, style=""):
+        return Window(
+            FormattedTextControl(content),
+            height=1,
+            align=WindowAlign.CENTER,
+            style=style,
+        )
+
+    body = [
+        Window(height=1),
+        row(HTML(f"<b>{title}</b>")),
+        row(subtitle, style="fg:#888888"),
+        Window(height=1),
+    ]
+
+    if error:
+        body.append(row(HTML(f"<ansired>✗  {error}</ansired>")))
+        body.append(Window(height=1))
+
+    body += [
+        row(label, style="fg:#aaaaaa"),
+        Window(height=1),
+        Frame(
+            Window(content=BufferControl(buffer=buf), height=1),
+            style="class:input-frame",
+        ),
+        Window(height=1),
+        row(hint, style="fg:#555555"),
+        Window(height=1),
+    ]
+
+    dialog = Frame(HSplit(body), style="class:outer-frame", width=36)
+    root   = HSplit([Window(), VSplit([Window(), dialog, Window()]), Window()])
+
+    style = Style.from_dict({
+        "outer-frame frame.border": f"fg:{border_color}",
+        "outer-frame frame.label":  f"bold fg:{border_color}",
+        "input-frame frame.border": "fg:#334455",
+    })
+
+    app = Application(
+        layout=Layout(root, focused_element=buf),
+        key_bindings=kb,
+        style=style,
+        full_screen=True,
+        mouse_support=False,
+    )
+    app.run()
+    return result[0]
+
+
+def search_prompt(error=None):
+    return _icao_dialog(
+        title="✈  aviation-cli",
+        subtitle="METAR + TAF  ·  terminal dashboard",
+        label="input station",
+        hint="enter ↵ to search   ctrl+c to quit",
+        error=error,
+    )
+
+
+def config_prompt():
+    current = get_default_icao()
+    return _icao_dialog(
+        title="⚙  set default station",
+        subtitle=f"current default: {current}",
+        label="new default ICAO",
+        hint="enter ↵ to save   ctrl+c to cancel",
+        border_color="#ffaa00",
+    )
+
+
+def interactive_mode():
+    icao = None
+    show_taf = False
+    raw_mode = False
+    error = None
+
+    while True:
+        # ── Search screen ────────────────────────────────────────────────
+        if icao is None:
+            icao = search_prompt(error=error)
+            error = None
+            if icao is None:
+                console.clear()
+                return
+
+        # ── Display screen ───────────────────────────────────────────────
+        console.clear()
+        try:
+            show_station(icao, show_taf=show_taf, raw_only=raw_mode)
+        except (ValueError, requests.RequestException) as e:
+            error = str(e)
+            icao = None
+            continue
+
+        # ── Key bar ──────────────────────────────────────────────────────
+        console.print()
+        console.rule(style="dim")
+
+        bar = Text(justify="center")
+        bar.append("q", style="bold cyan");    bar.append(" quit", style="dim")
+        bar.append("   t", style="bold cyan" if not show_taf  else "bold green")
+        bar.append(" taf"  + (" ✓" if show_taf  else ""), style="dim" if not show_taf  else "green")
+        bar.append("   r", style="bold cyan" if not raw_mode else "bold green")
+        bar.append(" raw"  + (" ✓" if raw_mode else ""), style="dim" if not raw_mode else "green")
+        bar.append("   s", style="bold cyan"); bar.append(" search", style="dim")
+        bar.append("   u", style="bold cyan"); bar.append(" refresh", style="dim")
+        bar.append("   c", style="bold cyan"); bar.append(" config", style="dim")
+        console.print(bar)
+
+        key = getch()
+        if key in ("q", "Q", "\x03"):   # q or Ctrl+C
+            console.clear()
+            return
+        elif key in ("t", "T"):
+            show_taf = not show_taf
+        elif key in ("r", "R"):
+            raw_mode = not raw_mode
+        elif key in ("s", "S"):
+            icao = None
+            show_taf = False
+            raw_mode = False
+        elif key in ("c", "C"):
+            new_default = config_prompt()
+            if new_default:
+                set_default_icao(new_default)
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="metar",
         description="Aviation weather dashboard — METAR + TAF",
     )
     parser.add_argument(
-        "icao", nargs="*", default=[DEFAULT_ICAO],
-        metavar="ICAO", help="One or more ICAO station codes (default: MMML)",
+        "icao", nargs="*", default=[],
+        metavar="ICAO", help="One or more ICAO station codes",
     )
     parser.add_argument("--taf", action="store_true", help="Include TAF forecast block")
     parser.add_argument("--raw", action="store_true", help="Print raw METAR string only")
+    parser.add_argument("-i", "--interactive", action="store_true", help="Interactive mode")
+    parser.add_argument("--set-default", metavar="ICAO", help="Save a default station to ~/.config/metar/config")
     args = parser.parse_args()
 
-    stations = [s.upper() for s in args.icao]
+    if args.set_default:
+        set_default_icao(args.set_default)
+        return
+
+    if args.interactive:
+        interactive_mode()
+        return
+
+    stations = [s.upper() for s in args.icao] or [get_default_icao()]
     for i, icao in enumerate(stations):
         if i > 0:
             console.print()
