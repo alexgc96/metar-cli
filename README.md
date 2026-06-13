@@ -28,7 +28,7 @@ METAR MMML  ·  Mexicali Intl, BC, MX   12m ago
   METAR MMML 130647Z 06003KT 10SM SKC 30/14 A2971
 ```
 
----
+-----
 
 ## Install
 
@@ -38,9 +38,9 @@ The recommended way is [pipx](https://pipx.pypa.io), which installs `metar` as a
 pipx install git+https://github.com/alexgc96/metar-cli.git
 ```
 
-That's it. `metar` is now available from anywhere.
+That’s it. `metar` is now available from anywhere.
 
-**Don't have pipx?**
+**Don’t have pipx?**
 
 ```bash
 # macOS (MacPorts)
@@ -62,7 +62,25 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 ```
 
----
+-----
+
+## Usage
+
+```
+metar [-h] [--taf] [--raw] [-i] [--set-default ICAO] [ICAO ...]
+
+positional arguments:
+  ICAO                One or more ICAO station codes
+
+options:
+  -h, --help          show this help message and exit
+  --taf               Include TAF forecast block
+  --raw               Print raw METAR string only
+  -i, --interactive   Interactive mode
+  --set-default ICAO  Save a default station to ~/.config/metar/config
+```
+
+-----
 
 ## Interactive mode (`-i`)
 
@@ -72,16 +90,16 @@ metar -i
 
 Full-screen ICAO search box. Once a station is loaded:
 
-| Key | Action |
-|-----|--------|
-| `t` | Toggle TAF forecast |
-| `r` | Toggle raw METAR string |
-| `u` | Refresh / re-fetch data |
-| `s` | New station search |
-| `c` | Set default station |
-| `q` | Quit |
+|Key|Action                 |
+|---|-----------------------|
+|`t`|Toggle TAF forecast    |
+|`r`|Toggle raw METAR string|
+|`u`|Refresh / re-fetch data|
+|`s`|New station search     |
+|`c`|Set default station    |
+|`q`|Quit                   |
 
----
+-----
 
 ## Data sources
 
@@ -89,12 +107,13 @@ Full-screen ICAO search box. Once a station is loaded:
 
 All primary weather data comes from the **Aviation Weather Center (AWC)** public API operated by NOAA/NWS. No API key required.
 
-| Data | Endpoint |
-|------|----------|
-| METAR (current) | `https://aviationweather.gov/api/data/metar?ids=MMML&format=json` |
-| TAF (forecast) | `https://aviationweather.gov/api/data/taf?ids=MMML&format=json` |
+|Data           |Endpoint                                                         |
+|---------------|-----------------------------------------------------------------|
+|METAR (current)|`https://aviationweather.gov/api/data/metar?ids=MMML&format=json`|
+|TAF (forecast) |`https://aviationweather.gov/api/data/taf?ids=MMML&format=json`  |
 
 **Fields used from METAR JSON:**
+
 - `temp`, `dewp` — temperature and dew point (°C)
 - `wdir`, `wspd`, `wgst` — wind direction (°), speed and gust (kt)
 - `visib` — visibility (statute miles)
@@ -108,6 +127,7 @@ All primary weather data comes from the **Aviation Weather Center (AWC)** public
 - `obsTime` — observation Unix timestamp
 
 **Fields used from TAF JSON:**
+
 - `validTimeFrom`, `validTimeTo` — forecast valid period (Unix timestamps)
 - `issueTime` — issue time (ISO 8601 string)
 - `rawTAF` — full raw TAF string
@@ -134,7 +154,7 @@ https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py
 - **wx string decode** — parsed locally from the `wxString` field using ICAO intensity/descriptor/phenomenon codes. No external data required.
 - **Remarks decode** — parsed locally from the `rawOb` RMK section (SLP, precise T/Td, station type, peak wind, pressure tendency, precip, maintenance flag).
 
----
+-----
 
 ## Configuration
 
@@ -151,17 +171,17 @@ Or use an environment variable (takes priority over the config file):
 export METAR_ICAO=MMML
 ```
 
----
+-----
 
 ## Safety disclaimer
 
 > **metar-cli is a convenience tool for curiosity and preflight awareness — not a substitute for an official weather briefing.**
->
-> Real and virtual pilots alike should always consult their country's aviation authority and any flight planning services available to them before flight. In the US this means a standard weather briefing via 1800wxbrief.com or ForeFlight. In Mexico, consult SENEAM and your applicable NOTAMs. In other countries, use whatever official sources your CAA provides.
->
+> 
+> Real and virtual pilots alike should always consult their country’s aviation authority and any flight planning services available to them before flight. In the US this means a standard weather briefing via 1800wxbrief.com or ForeFlight. In Mexico, consult SENEAM and your applicable NOTAMs. In other countries, use whatever official sources your CAA provides.
+> 
 > A single METAR is a snapshot in time at one point on the ground. It does not capture en-route conditions, winds aloft, SIGMETs, AIRMETs, TFRs, or anything happening above the field. Always get the full picture.
 
----
+-----
 
 ## Stack
 
@@ -170,7 +190,7 @@ export METAR_ICAO=MMML
 - [`requests`](https://requests.readthedocs.io/) — HTTP
 - [`prompt_toolkit`](https://python-prompt-toolkit.readthedocs.io/) — interactive mode UI
 
----
+-----
 
 ## Inspiration
 
