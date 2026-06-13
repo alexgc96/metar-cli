@@ -155,7 +155,7 @@ export METAR_ICAO=MMML
 
 ## Safety disclaimer
 
-> **aviation-cli is a convenience tool for curiosity and preflight awareness — not a substitute for an official weather briefing.**
+> **metar-cli is a convenience tool for curiosity and preflight awareness — not a substitute for an official weather briefing.**
 >
 > Real and virtual pilots alike should always consult their country's aviation authority and any flight planning services available to them before flight. In the US this means a standard weather briefing via 1800wxbrief.com or ForeFlight. In Mexico, consult SENEAM and your applicable NOTAMs. In other countries, use whatever official sources your CAA provides.
 >
