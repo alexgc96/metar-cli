@@ -103,6 +103,8 @@ def sparkline(values):
 def fetch_metar(icao):
     resp = requests.get(METAR_URL, params={"ids": icao, "format": "json"}, timeout=10)
     resp.raise_for_status()
+    if not resp.content:
+        raise ValueError(f"No METAR data for {icao}")
     data = resp.json()
     if not data:
         raise ValueError(f"No METAR data for {icao}")
@@ -112,6 +114,8 @@ def fetch_metar(icao):
 def fetch_taf(icao):
     resp = requests.get(TAF_URL, params={"ids": icao, "format": "json"}, timeout=10)
     resp.raise_for_status()
+    if not resp.content:
+        return None
     data = resp.json()
     return data[0] if data else None
 
