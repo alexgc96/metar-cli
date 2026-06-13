@@ -32,30 +32,34 @@ METAR MMML  ·  Mexicali Intl, BC, MX   12m ago
 
 ## Install
 
+The recommended way is [pipx](https://pipx.pypa.io), which installs `metar` as a global command without polluting your system Python:
+
+```bash
+pipx install git+https://github.com/alexgc96/metar-cli.git
+```
+
+That's it. `metar` is now available from anywhere.
+
+**Don't have pipx?**
+
+```bash
+# macOS (MacPorts)
+sudo port install pipx
+
+# macOS (Homebrew)
+brew install pipx
+
+# Linux / other
+pip install --user pipx
+```
+
+**For development / contributing:**
+
 ```bash
 git clone https://github.com/alexgc96/metar-cli.git
 cd metar-cli
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
-```
-
-After install, `metar` is available as a command inside the venv:
-
-```bash
-metar               # default station (MMML or your configured default)
-metar KJFK          # any ICAO code
-metar MMML KTUS     # multiple stations
-metar --taf         # include TAF forecast block
-metar --raw         # raw METAR string only
-metar -i            # interactive mode
-metar --set-default KJFK   # save a new default station
-```
-
-To use `metar` outside the venv, add the venv's bin to your PATH in `~/.zshrc` or `~/.bashrc`:
-
-```bash
-export PATH="/path/to/metar-cli/.venv/bin:$PATH"
 ```
 
 ---
