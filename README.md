@@ -1,4 +1,4 @@
-# aviation-cli
+# metar-cli
 
 Terminal METAR + TAF dashboard for pilots and aviation nerds. Live weather data rendered straight in your terminal — think wttr.in but aviation-focused.
 
