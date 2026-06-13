@@ -1,8 +1,0 @@
-Metadata-Version: 2.4
-Name: aviation-cli
-Version: 0.3.0
-Summary: Terminal METAR + TAF dashboard for pilots and aviation nerds
-Requires-Python: >=3.10
-Requires-Dist: rich
-Requires-Dist: requests
-Requires-Dist: prompt_toolkit
