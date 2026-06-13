@@ -35,7 +35,7 @@ METAR MMML  ·  Mexicali Intl, BC, MX   12m ago
 The recommended way is [pipx](https://pipx.pypa.io), which installs `metar` as a global command without polluting your system Python:
 
 ```bash
-pipx install git+https://github.com/alexgc96/metar-cli.git
+pipx install metar-cli
 ```
 
 That’s it. `metar` is now available from anywhere.
