@@ -213,7 +213,7 @@ def _decode_wx_token(tok):
         intensity = _WX_INTENSITY[tok[i]]
         i += 1
 
-    while i + 1 < len(tok) + 1:
+    while i < len(tok):
         code = tok[i:i+2]
         if not code:
             break
