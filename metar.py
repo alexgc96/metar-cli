@@ -19,6 +19,16 @@ from rich.columns import Columns
 console = Console()
 CONFIG_FILE = Path.home() / ".config" / "metar" / "config"
 FALLBACK_ICAO = "MMML"
+STALE_THRESHOLD_MINS = 60
+_metar_cache: dict = {}
+
+
+def obs_age_mins(obs_time):
+    try:
+        dt = datetime.fromtimestamp(int(obs_time), tz=timezone.utc)
+        return int((datetime.now(tz=timezone.utc) - dt).total_seconds() / 60)
+    except Exception:
+        return 0
 
 
 def get_default_icao():
@@ -108,6 +118,7 @@ def fetch_metar(icao):
     data = resp.json()
     if not data:
         raise ValueError(f"No METAR data for {icao}")
+    _metar_cache[icao] = data[0]
     return data[0]
 
 
@@ -437,7 +448,18 @@ def render_analysis_panel(rmk_items):
 
 
 def show_station(icao, show_taf=False, raw_only=False):
-    m       = fetch_metar(icao)
+    stale_reason = None
+    try:
+        m = fetch_metar(icao)
+        age = obs_age_mins(m.get("obsTime", 0))
+        if age > STALE_THRESHOLD_MINS:
+            stale_reason = f"observation is {age}m old"
+    except (ValueError, requests.RequestException) as e:
+        if icao in _metar_cache:
+            m = _metar_cache[icao]
+            stale_reason = "live fetch failed — showing last known observation"
+        else:
+            raise
     history = fetch_history(icao)
 
     fr     = m.get("fltCat") or m.get("flightCategory", "VFR")
@@ -469,6 +491,12 @@ def show_station(icao, show_taf=False, raw_only=False):
     hdr.append(f"   {age_str(obs)}", style="dim cyan")
     console.print(hdr)
     console.rule(style="dim white")
+
+    if stale_reason:
+        console.print(Panel(
+            Text(f"⚠  stale data  ·  {stale_reason}", style="bold yellow"),
+            border_style="yellow", expand=False,
+        ))
 
     # ── Stat cards ───────────────────────────────────────────────────────
     stats = Table(box=None, show_header=False, padding=(0, 2), expand=False)
@@ -760,7 +788,14 @@ def main():
     for i, icao in enumerate(stations):
         if i > 0:
             console.print()
-        show_station(icao, show_taf=args.taf, raw_only=args.raw)
+        try:
+            show_station(icao, show_taf=args.taf, raw_only=args.raw)
+        except ValueError as e:
+            console.print(f"[bold red]error:[/bold red] {e}")
+            sys.exit(1)
+        except requests.RequestException as e:
+            console.print(f"[bold red]network error:[/bold red] {e}")
+            sys.exit(1)
 
 
 if __name__ == "__main__":
