@@ -4,6 +4,6 @@ __pycache__/
 .env
 *.pem
 *.key
-docs/
+docs/*.md
 build/
 dist/
