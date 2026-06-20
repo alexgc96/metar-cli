@@ -2,6 +2,7 @@
 """metar-cli — METAR + TAF terminal dashboard"""
 
 import argparse
+import html
 import os
 import re
 import sys
@@ -648,7 +649,7 @@ def _icao_dialog(title, subtitle, label, hint, border_color="#00aaff", error=Non
     ]
 
     if error:
-        body.append(row(HTML(f"<ansired>✗  {error}</ansired>")))
+        body.append(row(HTML(f"<ansired>✗  {html.escape(error)}</ansired>")))
         body.append(Window(height=1))
 
     body += [
