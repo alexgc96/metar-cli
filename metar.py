@@ -521,8 +521,12 @@ def show_station(icao, show_taf=False, raw_only=False):
         if wgst:
             wind_val.append(f"G{int(wgst)}", style="bold red")
         wind_val.append("kt", style="cyan")
-        wind_val.append(f"  {int(wdir)}°", style="dim cyan")
-        wind_sub = Text(deg_to_cardinal(wdir), style="dim")
+        if wdir == "VRB":
+            wind_val.append("  VRB", style="dim cyan")
+            wind_sub = Text("variable", style="dim")
+        else:
+            wind_val.append(f"  {int(wdir)}°", style="dim cyan")
+            wind_sub = Text(deg_to_cardinal(wdir), style="dim")
 
     vis_cell  = Text(f"{visib} mi", style="bold white")
     ceil_cell = Text(get_ceiling(clouds), style="bold white")
