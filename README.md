@@ -199,3 +199,13 @@ export METAR_ICAO=MMML
 
 - [wttr.in](https://wttr.in) — terminal weather density as a design goal
 - [metar-taf.com](https://metar-taf.com) — MMML dashboard, June 2026
+
+-----
+
+## Additional docs 
+
+[METAR-CLI docs](https://alexgc96.github.io/metar-cli/docs) - Repo docs page, also links to the projects home page ;) 
+
+-----
+
+### Have fun and fly safe!!!
