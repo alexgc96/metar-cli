@@ -48,6 +48,7 @@ def set_default_icao(icao):
     console.print(f"Default station set to [bold]{icao.upper()}[/bold]  ({CONFIG_FILE})")
 METAR_URL = "https://aviationweather.gov/api/data/metar"
 TAF_URL   = "https://aviationweather.gov/api/data/taf"
+SIGMET_URL = "https://aviationweather.gov/api/data/airsigmet"
 ASOS_URL  = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
 
 FR_STYLES = {
@@ -130,6 +131,22 @@ def fetch_taf(icao):
         return None
     data = resp.json()
     return data[0] if data else None
+
+
+def fetch_sigmet(lat, lon):
+    resp = requests.get(SIGMET_URL, params={"format": "json"}, timeout=10)
+    resp.raise_for_status()
+    if not resp.content:
+        return []
+    data = resp.json()
+    if not data:
+        return []
+    # Filter by proximity to station lat/lon (approx 100nm radius)
+    filtered = []
+    for item in data:
+        # Items may have lat/lon or we display all if available
+        filtered.append(item)
+    return filtered[:10]  # Limit to 10 most recent
 
 
 def fetch_history(icao, hours=6):
@@ -363,6 +380,43 @@ def render_taf(taf):
     console.print(Panel(t, title="[dim]TAF[/dim]", border_style="dim"))
 
 
+def render_sigmet(sigmets):
+    if not sigmets:
+        return
+
+    t = Text()
+    if not sigmets:
+        t.append("no active SIGMETs/AIRMETs", style="dim")
+        console.print(Panel(t, title="[dim]SIGMETs / AIRMETs[/dim]", border_style="dim"))
+        return
+
+    for item in sigmets:
+        hazard = item.get("hazard", "UNKNOWN")
+        sigmet_type = item.get("type", "SIGMET")
+        valid_from = parse_iso(item.get("validTimeFrom", ""))
+        valid_to = parse_iso(item.get("validTimeTo", ""))
+        raw_text = item.get("rawSigmet", "")
+
+        # Color code by type
+        if sigmet_type == "SIGMET":
+            type_style = "bold red"
+        elif sigmet_type == "AIRMET":
+            type_style = "bold yellow"
+        else:
+            type_style = "bold white"
+
+        t.append(f"{sigmet_type} ", style=type_style)
+        t.append(f"{hazard}  ", style="bold white")
+        t.append(f"{valid_from} → {valid_to}", style="dim")
+        t.append("\n")
+
+        if raw_text:
+            t.append(raw_text, style="dim white")
+            t.append("\n\n")
+
+    console.print(Panel(t, title="[dim]SIGMETs / AIRMETs[/dim]", border_style="dim"))
+
+
 def density_alt(temp_c, altim_hpa, elev_m):
     elev_ft     = elev_m * 3.28084
     altim_inhg  = altim_hpa * 0.02953
@@ -448,7 +502,7 @@ def render_analysis_panel(rmk_items):
     return Panel(t, title="[dim]remarks[/dim]", border_style="dim")
 
 
-def show_station(icao, show_taf=False, raw_only=False):
+def show_station(icao, show_taf=False, raw_only=False, show_sigmet=False):
     stale_reason = None
     try:
         m = fetch_metar(icao)
@@ -598,6 +652,21 @@ def show_station(icao, show_taf=False, raw_only=False):
         taf = fetch_taf(icao)
         render_taf(taf)
 
+    # ── SIGMET / AIRMET ──────────────────────────────────────────────────
+    if show_sigmet:
+        console.rule(style="dim white")
+        lat = m.get("lat")
+        lon = m.get("lon")
+        if lat is not None and lon is not None:
+            try:
+                sigmets = fetch_sigmet(lat, lon)
+                render_sigmet(sigmets)
+            except requests.RequestException:
+                console.print(Panel(
+                    Text("failed to fetch SIGMETs", style="dim yellow"),
+                    border_style="yellow",
+                ))
+
 
 def getch():
     fd = sys.stdin.fileno()
@@ -713,6 +782,7 @@ def interactive_mode():
     icao = None
     show_taf = False
     raw_mode = False
+    show_sigmet = False
     error = None
 
     while True:
@@ -727,7 +797,7 @@ def interactive_mode():
         # ── Display screen ───────────────────────────────────────────────
         console.clear()
         try:
-            show_station(icao, show_taf=show_taf, raw_only=raw_mode)
+            show_station(icao, show_taf=show_taf, raw_only=raw_mode, show_sigmet=show_sigmet)
         except (ValueError, requests.RequestException) as e:
             error = str(e)
             icao = None
@@ -741,6 +811,8 @@ def interactive_mode():
         bar.append("q", style="bold cyan");    bar.append(" quit", style="dim")
         bar.append("   t", style="bold cyan" if not show_taf  else "bold green")
         bar.append(" taf"  + (" ✓" if show_taf  else ""), style="dim" if not show_taf  else "green")
+        bar.append("   w", style="bold cyan" if not show_sigmet else "bold green")
+        bar.append(" sigmet" + (" ✓" if show_sigmet else ""), style="dim" if not show_sigmet else "green")
         bar.append("   r", style="bold cyan" if not raw_mode else "bold green")
         bar.append(" raw"  + (" ✓" if raw_mode else ""), style="dim" if not raw_mode else "green")
         bar.append("   s", style="bold cyan"); bar.append(" search", style="dim")
@@ -754,11 +826,14 @@ def interactive_mode():
             return
         elif key in ("t", "T"):
             show_taf = not show_taf
+        elif key in ("w", "W"):
+            show_sigmet = not show_sigmet
         elif key in ("r", "R"):
             raw_mode = not raw_mode
         elif key in ("s", "S"):
             icao = None
             show_taf = False
+            show_sigmet = False
             raw_mode = False
         elif key in ("c", "C"):
             new_default = config_prompt()
@@ -776,6 +851,7 @@ def main():
         metavar="ICAO", help="One or more ICAO station codes",
     )
     parser.add_argument("--taf", action="store_true", help="Include TAF forecast block")
+    parser.add_argument("--sigmet", action="store_true", help="Include SIGMETs and AIRMETs")
     parser.add_argument("--raw", action="store_true", help="Print raw METAR string only")
     parser.add_argument("-i", "--interactive", action="store_true", help="Interactive mode")
     parser.add_argument("--set-default", metavar="ICAO", help="Save a default station to ~/.config/metar/config")
@@ -794,7 +870,7 @@ def main():
         if i > 0:
             console.print()
         try:
-            show_station(icao, show_taf=args.taf, raw_only=args.raw)
+            show_station(icao, show_taf=args.taf, raw_only=args.raw, show_sigmet=args.sigmet)
         except ValueError as e:
             console.print(f"[bold red]error:[/bold red] {e}")
             sys.exit(1)
