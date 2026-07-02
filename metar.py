@@ -2,6 +2,7 @@
 """metar-cli — METAR + TAF terminal dashboard"""
 
 import argparse
+import csv
 import html
 import os
 import re
@@ -16,12 +17,16 @@ from rich.text import Text
 from rich.panel import Panel
 from rich.table import Table
 from rich.columns import Columns
+from math import sin, cos, radians, degrees, atan2, sqrt
 
 console = Console()
 CONFIG_FILE = Path.home() / ".config" / "metar" / "config"
+CACHE_DIR = Path.home() / ".cache" / "metar"
+RUNWAYS_CACHE = CACHE_DIR / "runways.csv"
 FALLBACK_ICAO = "MMML"
 STALE_THRESHOLD_MINS = 60
 _metar_cache: dict = {}
+_runways_cache: dict = {}
 
 
 def obs_age_mins(obs_time):
@@ -147,6 +152,134 @@ def fetch_sigmet(lat, lon):
         # Items may have lat/lon or we display all if available
         filtered.append(item)
     return filtered[:10]  # Limit to 10 most recent
+
+
+def fetch_runways_cache():
+    """Fetch and cache OurAirports runways data."""
+    if _runways_cache:
+        return _runways_cache
+
+    if RUNWAYS_CACHE.exists():
+        try:
+            with open(RUNWAYS_CACHE, "r") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    icao = row.get("airport_ident", "").upper()
+                    if icao:
+                        if icao not in _runways_cache:
+                            _runways_cache[icao] = []
+                        try:
+                            heading = float(row.get("he_heading") or row.get("heading") or 0)
+                            length = float(row.get("length_ft") or 0)
+                            ident = row.get("le_ident", "").upper()
+                            _runways_cache[icao].append({
+                                "ident": ident,
+                                "heading": heading,
+                                "length_ft": length,
+                            })
+                        except (ValueError, TypeError):
+                            continue
+        except Exception:
+            pass
+    else:
+        # Fetch from OurAirports if cache doesn't exist
+        try:
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            resp = requests.get(
+                "https://ourairports.com/data/runways.csv",
+                timeout=30,
+            )
+            resp.raise_for_status()
+            RUNWAYS_CACHE.write_text(resp.text)
+            # Parse the freshly downloaded file
+            reader = csv.DictReader(resp.text.splitlines())
+            for row in reader:
+                icao = row.get("airport_ident", "").upper()
+                if icao:
+                    if icao not in _runways_cache:
+                        _runways_cache[icao] = []
+                    try:
+                        heading = float(row.get("he_heading") or row.get("heading") or 0)
+                        length = float(row.get("length_ft") or 0)
+                        ident = row.get("le_ident", "").upper()
+                        _runways_cache[icao].append({
+                            "ident": ident,
+                            "heading": heading,
+                            "length_ft": length,
+                        })
+                    except (ValueError, TypeError):
+                        continue
+        except Exception:
+            pass
+
+    return _runways_cache
+
+
+def calculate_crosswind(wdir, wspd, runway_heading):
+    """Calculate headwind and crosswind components.
+
+    Args:
+        wdir: Wind direction in degrees
+        wspd: Wind speed in knots
+        runway_heading: Runway heading in degrees
+
+    Returns:
+        (headwind_kt, crosswind_kt): Components of wind relative to runway
+    """
+    if wdir is None or wspd is None or wspd == 0:
+        return 0, 0
+
+    try:
+        wdir_rad = radians(float(wdir))
+        rwy_rad = radians(float(runway_heading))
+
+        # Wind vector components
+        wx = float(wspd) * sin(wdir_rad)
+        wy = float(wspd) * cos(wdir_rad)
+
+        # Project onto runway
+        headwind = wx * sin(rwy_rad) + wy * cos(rwy_rad)
+        crosswind = wx * cos(rwy_rad) - wy * sin(rwy_rad)
+
+        return round(headwind, 1), round(abs(crosswind), 1)
+    except (ValueError, TypeError):
+        return 0, 0
+
+
+def render_crosswind(icao, wdir, wspd):
+    """Render crosswind data panel for a station."""
+    runways = fetch_runways_cache().get(icao, [])
+
+    if not runways:
+        return Panel(
+            Text("No runway data available", style="dim"),
+            title="[dim]crosswind[/dim]",
+            border_style="dim",
+        )
+
+    tbl = Table(box=None, show_header=True, padding=(0, 1))
+    tbl.add_column("runway", style="bold cyan")
+    tbl.add_column("heading", style="dim")
+    tbl.add_column("headwind", style="cyan")
+    tbl.add_column("crosswind", style="yellow")
+
+    for rwy in runways:
+        if wdir is None or wspd == 0:
+            hw, cw = 0, 0
+        else:
+            hw, cw = calculate_crosswind(wdir, wspd, rwy["heading"])
+
+        hw_style = "bold white" if hw > 0 else "dim"
+        cw_style = "bold red" if cw > 20 else ("bold yellow" if cw > 10 else "white")
+
+        tbl.add_row(
+            rwy["ident"] or f"{rwy['heading']:.0f}°",
+            f"{rwy['heading']:.0f}°",
+            Text(f"{hw:+.1f}kt", style=hw_style),
+            Text(f"{cw:.1f}kt", style=cw_style),
+        )
+
+    return Panel(tbl, title="[dim]crosswind[/dim]", border_style="dim")
 
 
 def fetch_history(icao, hours=6):
@@ -502,7 +635,7 @@ def render_analysis_panel(rmk_items):
     return Panel(t, title="[dim]remarks[/dim]", border_style="dim")
 
 
-def show_station(icao, show_taf=False, raw_only=False, show_sigmet=False):
+def show_station(icao, show_taf=False, raw_only=False, show_sigmet=False, show_crosswind=False):
     stale_reason = None
     try:
         m = fetch_metar(icao)
@@ -667,6 +800,11 @@ def show_station(icao, show_taf=False, raw_only=False, show_sigmet=False):
                     border_style="yellow",
                 ))
 
+    # ── Crosswind ────────────────────────────────────────────────────────
+    if show_crosswind:
+        console.rule(style="dim white")
+        console.print(render_crosswind(icao, wdir, wspd))
+
 
 def getch():
     fd = sys.stdin.fileno()
@@ -783,6 +921,7 @@ def interactive_mode():
     show_taf = False
     raw_mode = False
     show_sigmet = False
+    show_crosswind = False
     error = None
 
     while True:
@@ -797,7 +936,7 @@ def interactive_mode():
         # ── Display screen ───────────────────────────────────────────────
         console.clear()
         try:
-            show_station(icao, show_taf=show_taf, raw_only=raw_mode, show_sigmet=show_sigmet)
+            show_station(icao, show_taf=show_taf, raw_only=raw_mode, show_sigmet=show_sigmet, show_crosswind=show_crosswind)
         except (ValueError, requests.RequestException) as e:
             error = str(e)
             icao = None
@@ -813,6 +952,8 @@ def interactive_mode():
         bar.append(" taf"  + (" ✓" if show_taf  else ""), style="dim" if not show_taf  else "green")
         bar.append("   w", style="bold cyan" if not show_sigmet else "bold green")
         bar.append(" sigmet" + (" ✓" if show_sigmet else ""), style="dim" if not show_sigmet else "green")
+        bar.append("   x", style="bold cyan" if not show_crosswind else "bold green")
+        bar.append(" xwind" + (" ✓" if show_crosswind else ""), style="dim" if not show_crosswind else "green")
         bar.append("   r", style="bold cyan" if not raw_mode else "bold green")
         bar.append(" raw"  + (" ✓" if raw_mode else ""), style="dim" if not raw_mode else "green")
         bar.append("   s", style="bold cyan"); bar.append(" search", style="dim")
@@ -828,12 +969,15 @@ def interactive_mode():
             show_taf = not show_taf
         elif key in ("w", "W"):
             show_sigmet = not show_sigmet
+        elif key in ("x", "X"):
+            show_crosswind = not show_crosswind
         elif key in ("r", "R"):
             raw_mode = not raw_mode
         elif key in ("s", "S"):
             icao = None
             show_taf = False
             show_sigmet = False
+            show_crosswind = False
             raw_mode = False
         elif key in ("c", "C"):
             new_default = config_prompt()
@@ -852,6 +996,7 @@ def main():
     )
     parser.add_argument("--taf", action="store_true", help="Include TAF forecast block")
     parser.add_argument("--sigmet", action="store_true", help="Include SIGMETs and AIRMETs")
+    parser.add_argument("--xwind", action="store_true", help="Include crosswind calculator")
     parser.add_argument("--raw", action="store_true", help="Print raw METAR string only")
     parser.add_argument("-i", "--interactive", action="store_true", help="Interactive mode")
     parser.add_argument("--set-default", metavar="ICAO", help="Save a default station to ~/.config/metar/config")
@@ -870,7 +1015,7 @@ def main():
         if i > 0:
             console.print()
         try:
-            show_station(icao, show_taf=args.taf, raw_only=args.raw, show_sigmet=args.sigmet)
+            show_station(icao, show_taf=args.taf, raw_only=args.raw, show_sigmet=args.sigmet, show_crosswind=args.xwind)
         except ValueError as e:
             console.print(f"[bold red]error:[/bold red] {e}")
             sys.exit(1)
