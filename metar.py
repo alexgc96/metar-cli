@@ -2,7 +2,9 @@
 """metar-cli — METAR + TAF terminal dashboard"""
 
 import argparse
+import csv
 import html
+import math
 import os
 import re
 import sys
@@ -147,6 +149,91 @@ def fetch_sigmet(lat, lon):
         # Items may have lat/lon or we display all if available
         filtered.append(item)
     return filtered[:10]  # Limit to 10 most recent
+
+
+def fetch_runways(icao):
+    cache_dir = Path.home() / ".cache" / "metar"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = cache_dir / "runways.csv"
+
+    if not cache_file.exists():
+        try:
+            resp = requests.get("https://ourairports.com/data/runways.csv", timeout=10)
+            resp.raise_for_status()
+            cache_file.write_text(resp.text)
+        except requests.RequestException:
+            return []
+
+    try:
+        content = cache_file.read_text()
+        reader = csv.DictReader(content.splitlines())
+        runways = []
+        for row in reader:
+            if row.get("airport_ident", "").upper() == icao:
+                runways.append(row)
+        return runways
+    except Exception:
+        return []
+
+
+def calc_crosswind(wind_dir_deg, wind_speed_kt, runway_heading_deg):
+    if not wind_dir_deg or wind_speed_kt is None or wind_speed_kt == 0:
+        return None, None
+
+    wind_rad = math.radians(float(wind_dir_deg))
+    runway_rad = math.radians(float(runway_heading_deg))
+
+    angle_diff = wind_rad - runway_rad
+
+    headwind = wind_speed_kt * math.cos(angle_diff)
+    crosswind = wind_speed_kt * math.sin(angle_diff)
+
+    return headwind, crosswind
+
+
+def render_crosswind(runway_info, wind_dir, wind_speed, wind_gust):
+    runway_id = runway_info.get("runway_ident", "??")
+    le_heading = runway_info.get("le_heading_degT")
+    he_heading = runway_info.get("he_heading_degT")
+
+    t = Text()
+    t.append(f"runway {runway_id}\n\n", style="bold white")
+
+    if wind_dir == "VRB" or wind_speed == 0 or wind_speed is None:
+        t.append("calm or variable wind\n", style="dim")
+        return Panel(t, title="[dim]crosswind[/dim]", border_style="dim")
+
+    if le_heading:
+        t.append(f"heading {int(le_heading)}°", style="dim white")
+        hwd, xwd = calc_crosswind(wind_dir, wind_speed, le_heading)
+        if hwd is not None:
+            t.append(f"  headwind: ", style="dim")
+            t.append(f"{hwd:+.1f}kt", style="bold cyan" if hwd > 0 else "bold red")
+            t.append(f"  crosswind: ", style="dim")
+            t.append(f"{abs(xwd):.1f}kt", style="bold white")
+            if wind_gust:
+                gust_hwd, gust_xwd = calc_crosswind(wind_dir, wind_gust, le_heading)
+                t.append(f" (gust ", style="dim")
+                t.append(f"{abs(gust_xwd):.1f}kt", style="bold yellow")
+                t.append(")", style="dim")
+        t.append("\n")
+
+    if he_heading and le_heading and int(le_heading) != int(he_heading):
+        t.append(f"heading {int(he_heading)}°", style="dim white")
+        hwd, xwd = calc_crosswind(wind_dir, wind_speed, he_heading)
+        if hwd is not None:
+            t.append(f"  headwind: ", style="dim")
+            t.append(f"{hwd:+.1f}kt", style="bold cyan" if hwd > 0 else "bold red")
+            t.append(f"  crosswind: ", style="dim")
+            t.append(f"{abs(xwd):.1f}kt", style="bold white")
+            if wind_gust:
+                gust_hwd, gust_xwd = calc_crosswind(wind_dir, wind_gust, he_heading)
+                t.append(f" (gust ", style="dim")
+                t.append(f"{abs(gust_xwd):.1f}kt", style="bold yellow")
+                t.append(")", style="dim")
+        t.append("\n")
+
+    return Panel(t, title="[dim]crosswind[/dim]", border_style="dim")
 
 
 def fetch_history(icao, hours=6):
@@ -502,7 +589,7 @@ def render_analysis_panel(rmk_items):
     return Panel(t, title="[dim]remarks[/dim]", border_style="dim")
 
 
-def show_station(icao, show_taf=False, raw_only=False, show_sigmet=False):
+def show_station(icao, show_taf=False, raw_only=False, show_sigmet=False, crosswind_runway=None):
     stale_reason = None
     try:
         m = fetch_metar(icao)
@@ -667,6 +754,29 @@ def show_station(icao, show_taf=False, raw_only=False, show_sigmet=False):
                     border_style="yellow",
                 ))
 
+    # ── Crosswind ────────────────────────────────────────────────────
+    if crosswind_runway:
+        console.rule(style="dim white")
+        runways = fetch_runways(icao)
+        matched = None
+        for rwy in runways:
+            rwy_id = rwy.get("runway_ident", "")
+            if rwy_id.rstrip("LRC").upper() == crosswind_runway.upper():
+                matched = rwy
+                break
+        if matched and wdir and wspd:
+            console.print(render_crosswind(matched, wdir, wspd, wgst))
+        elif not matched:
+            console.print(Panel(
+                Text(f"runway {crosswind_runway} not found", style="dim yellow"),
+                border_style="yellow",
+            ))
+        elif not wdir or not wspd:
+            console.print(Panel(
+                Text("no wind data available", style="dim yellow"),
+                border_style="yellow",
+            ))
+
 
 def getch():
     fd = sys.stdin.fileno()
@@ -778,11 +888,66 @@ def config_prompt():
     )
 
 
+def runway_picker_prompt(icao):
+    runways = fetch_runways(icao)
+    if not runways:
+        return None
+
+    from prompt_toolkit import Application
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.layout import Layout
+    from prompt_toolkit.layout.containers import Window, VSplit, HSplit
+    from prompt_toolkit.layout.controls import FormattedTextControl
+    from prompt_toolkit.styles import Style
+
+    result = [None]
+    selected = [0]
+
+    kb = KeyBindings()
+
+    @kb.add("up")
+    def _(event):
+        selected[0] = max(0, selected[0] - 1)
+
+    @kb.add("down")
+    def _(event):
+        selected[0] = min(len(runways) - 1, selected[0] + 1)
+
+    @kb.add("enter")
+    def _(event):
+        result[0] = runways[selected[0]]
+        event.app.exit()
+
+    @kb.add("c-c")
+    @kb.add("c-d")
+    def _(event):
+        event.app.exit()
+
+    def get_text():
+        text = "select runway (↑/↓ to navigate, enter to select, ctrl+c to cancel)\n\n"
+        for i, rwy in enumerate(runways):
+            marker = "► " if i == selected[0] else "  "
+            rwy_id = rwy.get("runway_ident", "??")
+            text += f"{marker}{rwy_id}\n"
+        return text
+
+    root = Window(FormattedTextControl(get_text))
+    app = Application(
+        layout=Layout(root),
+        key_bindings=kb,
+        full_screen=True,
+        mouse_support=False,
+    )
+    app.run()
+    return result[0]
+
+
 def interactive_mode():
     icao = None
     show_taf = False
     raw_mode = False
     show_sigmet = False
+    crosswind_runway = None
     error = None
 
     while True:
@@ -797,7 +962,7 @@ def interactive_mode():
         # ── Display screen ───────────────────────────────────────────────
         console.clear()
         try:
-            show_station(icao, show_taf=show_taf, raw_only=raw_mode, show_sigmet=show_sigmet)
+            show_station(icao, show_taf=show_taf, raw_only=raw_mode, show_sigmet=show_sigmet, crosswind_runway=crosswind_runway)
         except (ValueError, requests.RequestException) as e:
             error = str(e)
             icao = None
@@ -815,6 +980,8 @@ def interactive_mode():
         bar.append(" sigmet" + (" ✓" if show_sigmet else ""), style="dim" if not show_sigmet else "green")
         bar.append("   r", style="bold cyan" if not raw_mode else "bold green")
         bar.append(" raw"  + (" ✓" if raw_mode else ""), style="dim" if not raw_mode else "green")
+        bar.append("   x", style="bold cyan" if not crosswind_runway else "bold green")
+        bar.append(" xwind" + (f" {crosswind_runway}✓" if crosswind_runway else ""), style="dim" if not crosswind_runway else "green")
         bar.append("   s", style="bold cyan"); bar.append(" search", style="dim")
         bar.append("   u", style="bold cyan"); bar.append(" refresh", style="dim")
         bar.append("   c", style="bold cyan"); bar.append(" config", style="dim")
@@ -830,11 +997,18 @@ def interactive_mode():
             show_sigmet = not show_sigmet
         elif key in ("r", "R"):
             raw_mode = not raw_mode
+        elif key in ("x", "X"):
+            runway = runway_picker_prompt(icao)
+            if runway:
+                crosswind_runway = runway.get("runway_ident")
+            else:
+                crosswind_runway = None
         elif key in ("s", "S"):
             icao = None
             show_taf = False
             show_sigmet = False
             raw_mode = False
+            crosswind_runway = None
         elif key in ("c", "C"):
             new_default = config_prompt()
             if new_default:
@@ -853,6 +1027,7 @@ def main():
     parser.add_argument("--taf", action="store_true", help="Include TAF forecast block")
     parser.add_argument("--sigmet", action="store_true", help="Include SIGMETs and AIRMETs")
     parser.add_argument("--raw", action="store_true", help="Print raw METAR string only")
+    parser.add_argument("--xwind", metavar="RWY", help="Calculate crosswind for runway (e.g., 28, 10L)")
     parser.add_argument("-i", "--interactive", action="store_true", help="Interactive mode")
     parser.add_argument("--set-default", metavar="ICAO", help="Save a default station to ~/.config/metar/config")
     args = parser.parse_args()
@@ -870,7 +1045,7 @@ def main():
         if i > 0:
             console.print()
         try:
-            show_station(icao, show_taf=args.taf, raw_only=args.raw, show_sigmet=args.sigmet)
+            show_station(icao, show_taf=args.taf, raw_only=args.raw, show_sigmet=args.sigmet, crosswind_runway=args.xwind)
         except ValueError as e:
             console.print(f"[bold red]error:[/bold red] {e}")
             sys.exit(1)
