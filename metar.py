@@ -51,7 +51,7 @@ def set_default_icao(icao):
 METAR_URL = "https://aviationweather.gov/api/data/metar"
 TAF_URL   = "https://aviationweather.gov/api/data/taf"
 SIGMET_URL = "https://aviationweather.gov/api/data/airsigmet"
-PIREPS_URL = "https://aviationweather.gov/api/data/pireps"
+PIREPS_URL = "https://aviationweather.gov/api/data/pirep"
 ASOS_URL  = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
 
 FR_STYLES = {
@@ -152,40 +152,17 @@ def fetch_sigmet(lat, lon):
     return filtered[:10]  # Limit to 10 most recent
 
 
-def calc_distance(lat1, lon1, lat2, lon2):
-    import math
-    # Haversine distance in nautical miles
-    R = 3440.06  # Earth's radius in nautical miles
-    lat1_rad = math.radians(float(lat1))
-    lat2_rad = math.radians(float(lat2))
-    delta_lat = math.radians(float(lat2) - float(lat1))
-    delta_lon = math.radians(float(lon2) - float(lon1))
-    a = math.sin(delta_lat / 2) ** 2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(delta_lon / 2) ** 2
-    c = 2 * math.asin(math.sqrt(a))
-    return R * c
 
-
-def fetch_pireps(lat, lon, radius_nm=50):
-    resp = requests.get(PIREPS_URL, params={"format": "json"}, timeout=10)
+def fetch_pireps(icao, radius_nm=50):
+    params = {"format": "json", "id": icao.upper(), "distance": int(radius_nm)}
+    resp = requests.get(PIREPS_URL, params=params, timeout=10)
     resp.raise_for_status()
     if not resp.content:
         return []
     data = resp.json()
     if not data:
         return []
-    # Filter by proximity to station (default 50nm radius)
-    filtered = []
-    for item in data:
-        try:
-            item_lat = item.get("lat")
-            item_lon = item.get("lon")
-            if item_lat is not None and item_lon is not None:
-                dist = calc_distance(lat, lon, item_lat, item_lon)
-                if dist <= radius_nm:
-                    filtered.append(item)
-        except (ValueError, TypeError):
-            continue
-    return filtered[:15]  # Limit to 15 most recent
+    return data[:15]
 
 
 def fetch_runways(icao):
@@ -229,9 +206,13 @@ def calc_crosswind(wind_dir_deg, wind_speed_kt, runway_heading_deg):
 
 
 def render_crosswind(runway_info, wind_dir, wind_speed, wind_gust):
-    runway_id = runway_info.get("runway_ident", "??")
-    le_heading = runway_info.get("le_heading_degT")
-    he_heading = runway_info.get("he_heading_degT")
+    le_id = runway_info.get("le_ident", "??")
+    he_id = runway_info.get("he_ident", "??")
+    runway_id = f"{le_id}/{he_id}"
+    _le = runway_info.get("le_heading_degT", "")
+    _he = runway_info.get("he_heading_degT", "")
+    le_heading = float(_le) if _le else None
+    he_heading = float(_he) if _he else None
 
     t = Text()
     t.append(f"runway {runway_id}\n\n", style="bold white")
@@ -516,12 +497,13 @@ def render_sigmet(sigmets):
 
     for item in sigmets:
         hazard = item.get("hazard", "UNKNOWN")
-        sigmet_type = item.get("type", "SIGMET")
-        valid_from = parse_iso(item.get("validTimeFrom", ""))
-        valid_to = parse_iso(item.get("validTimeTo", ""))
-        raw_text = item.get("rawSigmet", "")
+        sigmet_type = item.get("airSigmetType", "SIGMET")
+        vf = item.get("validTimeFrom")
+        vt = item.get("validTimeTo")
+        valid_from = datetime.utcfromtimestamp(vf).strftime("%H:%Mz") if vf else ""
+        valid_to = datetime.utcfromtimestamp(vt).strftime("%H:%Mz") if vt else ""
+        raw_text = item.get("rawAirSigmet", "")
 
-        # Color code by type
         if sigmet_type == "SIGMET":
             type_style = "bold red"
         elif sigmet_type == "AIRMET":
@@ -535,7 +517,7 @@ def render_sigmet(sigmets):
         t.append("\n")
 
         if raw_text:
-            t.append(raw_text, style="dim white")
+            t.append(raw_text.strip(), style="dim white")
             t.append("\n\n")
 
     console.print(Panel(t, title="[dim]SIGMETs / AIRMETs[/dim]", border_style="dim"))
@@ -550,39 +532,44 @@ def render_pireps(pireps):
 
     t = Text()
     for item in pireps:
-        aircraft = item.get("aircraftType", "unknown")
-        altitude = item.get("altitude")
+        aircraft = item.get("acType") or "?"
+        flt_lvl = item.get("fltLvl")
         temp = item.get("temp")
-        wind_dir = item.get("windDir")
-        wind_speed = item.get("windSpeed")
-        turbulence = item.get("turbulence", "")
-        icing = item.get("icing", "")
-        weather = item.get("weather", "")
-        timestamp = parse_iso(item.get("issueTime", ""))
+        wdir = item.get("wdir")
+        wspd = item.get("wspd")
+        tb = " ".join(filter(None, [item.get("tbFreq1", ""), item.get("tbInt1", ""), item.get("tbType1", "")])).strip()
+        ice = " ".join(filter(None, [item.get("icgInt1", ""), item.get("icgType1", "")])).strip()
+        wx = item.get("wxString", "").strip()
+        obs_time = item.get("obsTime")
+        raw = item.get("rawOb", "")
 
-        t.append(f"{aircraft}", style="bold white")
-        if altitude:
-            t.append(f"  FL{int(altitude / 100):03d}", style="bold cyan")
-        t.append(f"  {timestamp}", style="dim")
+        t.append(aircraft, style="bold white")
+        if flt_lvl:
+            t.append(f"  FL{int(flt_lvl):03d}", style="bold cyan")
+        if obs_time:
+            dt = datetime.utcfromtimestamp(obs_time)
+            t.append(f"  {dt.strftime('%H:%Mz')}", style="dim")
         t.append("\n")
 
         details = []
-        if temp:
+        if temp is not None:
             details.append(f"{int(temp)}°C")
-        if wind_speed and wind_dir:
-            details.append(f"{int(wind_speed)}kt from {int(wind_dir)}°")
+        if wspd is not None and wdir is not None:
+            details.append(f"{int(wspd)}kt/{int(wdir)}°")
         if details:
-            t.append("  · " + "  · ".join(details), style="dim white")
+            t.append("  " + "  ".join(details), style="dim white")
             t.append("\n")
 
-        if turbulence:
-            t.append(f"  turb: {turbulence}", style="bold yellow" if turbulence == "moderate" or turbulence == "severe" else "white")
+        if tb:
+            severity = "bold yellow" if any(w in tb.upper() for w in ("MOD", "SEV", "EXTM")) else "white"
+            t.append(f"  turb: {tb}", style=severity)
             t.append("\n")
-        if icing:
-            t.append(f"  icing: {icing}", style="bold yellow" if icing == "moderate" or icing == "severe" else "white")
+        if ice:
+            severity = "bold yellow" if any(w in ice.upper() for w in ("MOD", "SEV")) else "white"
+            t.append(f"  ice:  {ice}", style=severity)
             t.append("\n")
-        if weather:
-            t.append(f"  weather: {weather}", style="white")
+        if wx:
+            t.append(f"  wx:   {wx}", style="white")
             t.append("\n")
 
         t.append("\n")
@@ -843,26 +830,23 @@ def show_station(icao, show_taf=False, raw_only=False, show_sigmet=False, show_p
     # ── PIREPs ───────────────────────────────────────────────────────
     if show_pireps:
         console.rule(style="dim white")
-        lat = m.get("lat")
-        lon = m.get("lon")
-        if lat is not None and lon is not None:
-            try:
-                pireps = fetch_pireps(lat, lon)
-                render_pireps(pireps)
-            except requests.RequestException:
-                console.print(Panel(
-                    Text("failed to fetch PIREPs", style="dim yellow"),
-                    border_style="yellow",
-                ))
+        try:
+            pireps = fetch_pireps(icao)
+            render_pireps(pireps)
+        except requests.RequestException:
+            console.print(Panel(
+                Text("failed to fetch PIREPs", style="dim yellow"),
+                border_style="yellow",
+            ))
 
     # ── Crosswind ────────────────────────────────────────────────────
     if crosswind_runway:
         console.rule(style="dim white")
         runways = fetch_runways(icao)
         matched = None
+        target = crosswind_runway.upper()
         for rwy in runways:
-            rwy_id = rwy.get("runway_ident", "")
-            if rwy_id.rstrip("LRC").upper() == crosswind_runway.upper():
+            if rwy.get("le_ident", "").upper() == target or rwy.get("he_ident", "").upper() == target:
                 matched = rwy
                 break
         if matched and wdir and wspd:
@@ -1028,8 +1012,9 @@ def runway_picker_prompt(icao):
         text = "select runway (↑/↓ to navigate, enter to select, ctrl+c to cancel)\n\n"
         for i, rwy in enumerate(runways):
             marker = "► " if i == selected[0] else "  "
-            rwy_id = rwy.get("runway_ident", "??")
-            text += f"{marker}{rwy_id}\n"
+            le = rwy.get("le_ident", "??")
+            he = rwy.get("he_ident", "??")
+            text += f"{marker}{le}/{he}\n"
         return text
 
     root = Window(FormattedTextControl(get_text))
@@ -1106,7 +1091,7 @@ def interactive_mode():
         elif key in ("x", "X"):
             runway = runway_picker_prompt(icao)
             if runway:
-                crosswind_runway = runway.get("runway_ident")
+                crosswind_runway = runway.get("le_ident")
             else:
                 crosswind_runway = None
         elif key in ("s", "S"):
