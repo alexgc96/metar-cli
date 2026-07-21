@@ -165,6 +165,21 @@ def fetch_pireps(icao, radius_nm=50):
     return data[:15]
 
 
+def fetch_winds_aloft(icao):
+    resp = requests.get(
+        "https://aviationweather.gov/api/data/windtemp",
+        params={"format": "json", "level": "lo", "id": icao.upper()},
+        timeout=10
+    )
+    resp.raise_for_status()
+    if not resp.content:
+        return None
+    data = resp.json()
+    if isinstance(data, list) and len(data) > 0:
+        return data[0]
+    return data if isinstance(data, dict) else None
+
+
 def fetch_runways(icao):
     cache_dir = Path.home() / ".cache" / "metar"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -577,6 +592,54 @@ def render_pireps(pireps):
     console.print(Panel(t, title="[dim]PIREPs[/dim]", border_style="dim"))
 
 
+def render_winds_aloft(data):
+    if not data:
+        t = Text()
+        t.append("no winds aloft data available", style="dim")
+        return Panel(t, title="[dim]winds aloft[/dim]", border_style="dim")
+
+    altitudes = [3000, 6000, 9000, 12000, 18000]
+    alt_labels = {3000: "3k", 6000: "6k", 9000: "9k", 12000: "12k", 18000: "18k"}
+
+    tbl = Table(box=None, show_header=True, padding=(0, 2), expand=False)
+    tbl.add_column("alt", style="dim")
+    tbl.add_column("wind", style="white")
+    tbl.add_column("spd", justify="right")
+    tbl.add_column("temp")
+
+    levels = data.get("profiles", []) if isinstance(data, dict) else []
+
+    for alt in altitudes:
+        alt_label = alt_labels.get(alt, f"{alt//1000}k")
+        level = next((l for l in levels if l.get("pres") == alt or l.get("hght") == alt), None)
+
+        if level:
+            wdir = level.get("drct")
+            wspd = level.get("sknt")
+            temp = level.get("temp")
+
+            wind_text = Text()
+            if wdir is not None and wspd is not None:
+                card = deg_to_cardinal(wdir)
+                wind_text.append(f"{int(wdir)}°{card}", style="dim cyan")
+                wspd_style = "bold red" if wspd > 30 else "bold cyan"
+                wind_text.append(f"  {int(wspd):3d}kt", style=wspd_style)
+            else:
+                wind_text.append("—", style="dim")
+
+            temp_text = Text()
+            if temp is not None:
+                temp_text.append(f"{int(temp):+3d}°C", style="yellow")
+            else:
+                temp_text.append("—", style="dim")
+
+            tbl.add_row(alt_label, wind_text, "", temp_text)
+        else:
+            tbl.add_row(alt_label, Text("—", style="dim"), "", Text("—", style="dim"))
+
+    return Panel(tbl, title="[dim]winds aloft[/dim]", border_style="dim")
+
+
 def density_alt(temp_c, altim_hpa, elev_m):
     elev_ft     = elev_m * 3.28084
     altim_inhg  = altim_hpa * 0.02953
@@ -662,7 +725,7 @@ def render_analysis_panel(rmk_items):
     return Panel(t, title="[dim]remarks[/dim]", border_style="dim")
 
 
-def show_station(icao, show_taf=False, raw_only=False, show_sigmet=False, show_pireps=False, crosswind_runway=None):
+def show_station(icao, show_taf=False, raw_only=False, show_sigmet=False, show_pireps=False, show_aloft=False, crosswind_runway=None):
     stale_reason = None
     try:
         m = fetch_metar(icao)
@@ -836,6 +899,18 @@ def show_station(icao, show_taf=False, raw_only=False, show_sigmet=False, show_p
         except requests.RequestException:
             console.print(Panel(
                 Text("failed to fetch PIREPs", style="dim yellow"),
+                border_style="yellow",
+            ))
+
+    # ── Winds Aloft ───────────────────────────────────────────────
+    if show_aloft:
+        console.rule(style="dim white")
+        try:
+            aloft = fetch_winds_aloft(icao)
+            console.print(render_winds_aloft(aloft))
+        except requests.RequestException:
+            console.print(Panel(
+                Text("failed to fetch winds aloft", style="dim yellow"),
                 border_style="yellow",
             ))
 
@@ -1034,6 +1109,7 @@ def interactive_mode():
     raw_mode = False
     show_sigmet = False
     show_pireps = False
+    show_aloft = False
     crosswind_runway = None
     error = None
 
@@ -1049,7 +1125,7 @@ def interactive_mode():
         # ── Display screen ───────────────────────────────────────────────
         console.clear()
         try:
-            show_station(icao, show_taf=show_taf, raw_only=raw_mode, show_sigmet=show_sigmet, show_pireps=show_pireps, crosswind_runway=crosswind_runway)
+            show_station(icao, show_taf=show_taf, raw_only=raw_mode, show_sigmet=show_sigmet, show_pireps=show_pireps, show_aloft=show_aloft, crosswind_runway=crosswind_runway)
         except (ValueError, requests.RequestException) as e:
             error = str(e)
             icao = None
@@ -1067,6 +1143,8 @@ def interactive_mode():
         bar.append(" sigmet" + (" ✓" if show_sigmet else ""), style="dim" if not show_sigmet else "green")
         bar.append("   p", style="bold cyan" if not show_pireps else "bold green")
         bar.append(" pireps" + (" ✓" if show_pireps else ""), style="dim" if not show_pireps else "green")
+        bar.append("   a", style="bold cyan" if not show_aloft else "bold green")
+        bar.append(" aloft" + (" ✓" if show_aloft else ""), style="dim" if not show_aloft else "green")
         bar.append("   r", style="bold cyan" if not raw_mode else "bold green")
         bar.append(" raw"  + (" ✓" if raw_mode else ""), style="dim" if not raw_mode else "green")
         bar.append("   x", style="bold cyan" if not crosswind_runway else "bold green")
@@ -1086,6 +1164,8 @@ def interactive_mode():
             show_sigmet = not show_sigmet
         elif key in ("p", "P"):
             show_pireps = not show_pireps
+        elif key in ("a", "A"):
+            show_aloft = not show_aloft
         elif key in ("r", "R"):
             raw_mode = not raw_mode
         elif key in ("x", "X"):
@@ -1099,6 +1179,7 @@ def interactive_mode():
             show_taf = False
             show_sigmet = False
             show_pireps = False
+            show_aloft = False
             raw_mode = False
             crosswind_runway = None
         elif key in ("c", "C"):
@@ -1119,6 +1200,7 @@ def main():
     parser.add_argument("--taf", action="store_true", help="Include TAF forecast block")
     parser.add_argument("--sigmet", action="store_true", help="Include SIGMETs and AIRMETs")
     parser.add_argument("--pireps", action="store_true", help="Include PIREPs (pilot reports) in local area")
+    parser.add_argument("--aloft", action="store_true", help="Include winds aloft forecast")
     parser.add_argument("--raw", action="store_true", help="Print raw METAR string only")
     parser.add_argument("--xwind", metavar="RWY", help="Calculate crosswind for runway (e.g., 28, 10L)")
     parser.add_argument("-i", "--interactive", action="store_true", help="Interactive mode")
@@ -1138,7 +1220,7 @@ def main():
         if i > 0:
             console.print()
         try:
-            show_station(icao, show_taf=args.taf, raw_only=args.raw, show_sigmet=args.sigmet, show_pireps=args.pireps, crosswind_runway=args.xwind)
+            show_station(icao, show_taf=args.taf, raw_only=args.raw, show_sigmet=args.sigmet, show_pireps=args.pireps, show_aloft=args.aloft, crosswind_runway=args.xwind)
         except ValueError as e:
             console.print(f"[bold red]error:[/bold red] {e}")
             sys.exit(1)
