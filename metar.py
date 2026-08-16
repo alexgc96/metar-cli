@@ -86,7 +86,7 @@ def deg_to_cardinal(deg):
 
 
 def render_rose(wdir, wspd, color):
-    active = ROSE_POS[deg_to_cardinal(wdir)] if wdir and wspd > 0 else None
+    active = ROSE_POS[deg_to_cardinal(wdir)] if wdir and wdir != "VRB" and wspd > 0 else None
     t = Text()
     for r in range(3):
         for c in range(3):
