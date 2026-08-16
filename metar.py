@@ -81,12 +81,15 @@ CHANGE_STYLES = {
 
 
 def deg_to_cardinal(deg):
+    if deg is None or deg == "VRB":
+        return None
     dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
     return dirs[round(float(deg) / 45) % 8]
 
 
 def render_rose(wdir, wspd, color):
-    active = ROSE_POS[deg_to_cardinal(wdir)] if wdir and wdir != "VRB" and wspd > 0 else None
+    cardinal = deg_to_cardinal(wdir) if wspd > 0 else None
+    active = ROSE_POS[cardinal] if cardinal else None
     t = Text()
     for r in range(3):
         for c in range(3):
