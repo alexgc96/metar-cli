@@ -518,8 +518,8 @@ def render_sigmet(sigmets):
         sigmet_type = item.get("airSigmetType", "SIGMET")
         vf = item.get("validTimeFrom")
         vt = item.get("validTimeTo")
-        valid_from = datetime.utcfromtimestamp(vf).strftime("%H:%Mz") if vf else ""
-        valid_to = datetime.utcfromtimestamp(vt).strftime("%H:%Mz") if vt else ""
+        valid_from = datetime.fromtimestamp(vf, tz=timezone.utc).strftime("%H:%Mz") if vf else ""
+        valid_to = datetime.fromtimestamp(vt, tz=timezone.utc).strftime("%H:%Mz") if vt else ""
         raw_text = item.get("rawAirSigmet", "")
 
         if sigmet_type == "SIGMET":
@@ -565,7 +565,7 @@ def render_pireps(pireps):
         if flt_lvl:
             t.append(f"  FL{int(flt_lvl):03d}", style="bold cyan")
         if obs_time:
-            dt = datetime.utcfromtimestamp(obs_time)
+            dt = datetime.fromtimestamp(obs_time, tz=timezone.utc)
             t.append(f"  {dt.strftime('%H:%Mz')}", style="dim")
         t.append("\n")
 
