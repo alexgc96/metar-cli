@@ -9,8 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      pull-requests: write
+      issues: write
       id-token: write
 
     steps:
@@ -23,7 +23,59 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+          # track_progress: true is the one thing that actually makes this
+          # bot post anything. Confirmed by direct A/B evidence: every run
+          # across this repo AND alexgc96/metar-cli (its sibling, where this
+          # workflow originates) that omitted it — regardless of plugin vs.
+          # direct-prompt, regardless of the tool allowlist, regardless of
+          # permissions: write being correctly set — did real multi-turn
+          # work, hit a permission denial, and posted nothing. The one run
+          # that ever posted real findings (metar-cli PR #17) had
+          # track_progress: true set.
+          #
+          # The cost: track_progress forces claude-code-action's "tag mode",
+          # which unconditionally MERGES Bash(git add/commit/push/rm) and
+          # Edit/Write/MultiEdit into the tool set regardless of what
+          # allowedTools below says — this is open upstream, labeled
+          # showstopper, no fix or workaround that keeps both progress
+          # tracking and read-only enforcement:
+          # https://github.com/anthropics/claude-code-action/issues/860
+          # In plain terms: this reviewer has real push/commit access to the
+          # repo on every PR run, regardless of the allowlist below. Accepted
+          # here because PRs on this repo are self- or Claude-authored, not
+          # open to public contribution — reconsider if that ever changes.
+          #
+          # `permissions:` above must stay pull-requests/issues: write, not
+          # read — a PR comment (inline or top-level) is posted through the
+          # issue-comments API even for inline review comments, so read-only
+          # here makes every post attempt fail closed regardless of
+          # everything else in this file.
+          track_progress: true
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           prompt: '/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
-          claude_args: '--allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*),Bash(git diff origin/master...HEAD:*),Bash(git log origin/master..HEAD:*)"'
+
+          # Trimmed from a prior version of this file in two ways:
+          #
+          # 1. Dropped gh issue view/search/list — read access to every issue
+          #    in the repo has nothing to do with reviewing a diff, and is
+          #    unnecessary Bash surface for an agent whose input (the PR
+          #    diff/description) is untrusted content.
+          # 2. git diff/log scoped to an exact prefix, not the bare
+          #    Bash(git diff:*)/Bash(git log:*) wildcard metar-cli's own
+          #    review bot flagged on itself (metar-cli PR #17): an unscoped
+          #    git diff:* allows `git diff --no-index <path1> <path2>`,
+          #    which is NOT restricted to the repo — it can read arbitrary
+          #    files on the runner (e.g. .git/config, which holds the
+          #    checkout token via http.extraheader). Fixed here to this
+          #    repo's actual default branch (main, not metar-cli's master).
+          claude_args: '--allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git diff origin/main...HEAD:*),Bash(git log origin/main..HEAD:*)"'
+
+          # Visible now on purpose: with track_progress granting real write
+          # access (see above), full output is a compensating control, not
+          # just a debugging nicety — it's the only way to see exactly what
+          # this bot did on a given run.
+          show_full_output: true
+          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
+          # or https://code.claude.com/docs/en/cli-reference for available options
