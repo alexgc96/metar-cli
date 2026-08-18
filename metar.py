@@ -281,7 +281,10 @@ def fetch_history(icao, hours=6):
         "year2": now.year,   "month2": now.month,   "day2": now.day,   "hour2": now.hour,
         "tz": "UTC", "format": "onlycomma", "latlon": "no", "missing": "null",
     }, timeout=10)
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except requests.RequestException:
+        return []
     records = []
     for line in resp.text.strip().splitlines()[1:]:
         parts = line.split(",")
@@ -742,10 +745,7 @@ def show_station(icao, show_taf=False, raw_only=False, show_sigmet=False, show_p
             stale_reason = "live fetch failed — showing last known observation"
         else:
             raise
-    try:
-        history = fetch_history(icao)
-    except requests.RequestException:
-        history = []
+    history = fetch_history(icao)
 
     fr     = m.get("fltCat") or m.get("flightCategory", "VFR")
     temp   = m.get("temp")
