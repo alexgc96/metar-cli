@@ -742,7 +742,10 @@ def show_station(icao, show_taf=False, raw_only=False, show_sigmet=False, show_p
             stale_reason = "live fetch failed — showing last known observation"
         else:
             raise
-    history = fetch_history(icao)
+    try:
+        history = fetch_history(icao)
+    except requests.RequestException:
+        history = []
 
     fr     = m.get("fltCat") or m.get("flightCategory", "VFR")
     temp   = m.get("temp")
