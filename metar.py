@@ -281,6 +281,10 @@ def fetch_history(icao, hours=6):
         "year2": now.year,   "month2": now.month,   "day2": now.day,   "hour2": now.hour,
         "tz": "UTC", "format": "onlycomma", "latlon": "no", "missing": "null",
     }, timeout=10)
+    try:
+        resp.raise_for_status()
+    except requests.RequestException:
+        return []
     records = []
     for line in resp.text.strip().splitlines()[1:]:
         parts = line.split(",")
