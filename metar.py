@@ -281,6 +281,9 @@ def fetch_history(icao, hours=6):
         "year2": now.year,   "month2": now.month,   "day2": now.day,   "hour2": now.hour,
         "tz": "UTC", "format": "onlycomma", "latlon": "no", "missing": "null",
     }, timeout=10)
+    
+    resp.raise_for_status()
+
     records = []
     for line in resp.text.strip().splitlines()[1:]:
         parts = line.split(",")
@@ -741,7 +744,20 @@ def show_station(icao, show_taf=False, raw_only=False, show_sigmet=False, show_p
             stale_reason = "live fetch failed — showing last known observation"
         else:
             raise
-    history = fetch_history(icao)
+
+    history = []
+    history_error = None    
+
+    try:
+        history = fetch_history(icao)
+    except requests.exceptions.Timeout:
+        history_error = "ASOS request timed out"
+    except requests.exceptions.ConnectionError:
+        history_error = "network connection failed"
+    except requests.exceptions.HTTPError as e:
+        history_error = f"ASOS returned HTTP {e.response.status_code}"
+    except requests.exceptions.RequestException:
+        history_error = "failed to fetch ASOS data"
 
     fr     = m.get("fltCat") or m.get("flightCategory", "VFR")
     temp   = m.get("temp")
