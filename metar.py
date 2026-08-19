@@ -880,10 +880,17 @@ def show_station(icao, show_taf=False, raw_only=False, show_sigmet=False, show_p
     console.rule(style="dim white")
 
     # ── Sparkline history ────────────────────────────────────────────────
-    hist_text = render_history(history)
-    if hist_text:
-        console.print(Panel(hist_text, title="[dim]history (6h)[/dim]", border_style="dim"))
+    if history_error:
+        console.print(Panel(
+            Text(f"⚠  history unavailable  ·  {history_error}", style="bold yellow"),
+            border_style="yellow", expand=False,
+        ))
         console.rule(style="dim white")
+    else:
+        hist_text = render_history(history)
+        if hist_text:
+            console.print(Panel(hist_text, title="[dim]history (6h)[/dim]", border_style="dim"))
+            console.rule(style="dim white")
 
     # ── Raw METAR ────────────────────────────────────────────────────────
     console.print(Panel(Text(raw, style="dim white"), title="[dim]raw[/dim]", border_style="dim"))
