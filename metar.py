@@ -505,9 +505,6 @@ def render_taf(taf):
 
 
 def render_sigmet(sigmets):
-    if not sigmets:
-        return
-
     t = Text()
     if not sigmets:
         t.append("no active SIGMETs/AIRMETs", style="dim")
