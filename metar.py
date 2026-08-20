@@ -605,7 +605,6 @@ def render_winds_aloft(data):
     tbl = Table(box=None, show_header=True, padding=(0, 2), expand=False)
     tbl.add_column("alt", style="dim")
     tbl.add_column("wind", style="white")
-    tbl.add_column("spd", justify="right")
     tbl.add_column("temp")
 
     levels = data.get("profiles", []) if isinstance(data, dict) else []
@@ -634,9 +633,9 @@ def render_winds_aloft(data):
             else:
                 temp_text.append("—", style="dim")
 
-            tbl.add_row(alt_label, wind_text, "", temp_text)
+            tbl.add_row(alt_label, wind_text, temp_text)
         else:
-            tbl.add_row(alt_label, Text("—", style="dim"), "", Text("—", style="dim"))
+            tbl.add_row(alt_label, Text("—", style="dim"), Text("—", style="dim"))
 
     return Panel(tbl, title="[dim]winds aloft[/dim]", border_style="dim")
 
