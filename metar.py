@@ -139,7 +139,17 @@ def fetch_taf(icao):
     return data[0] if data else None
 
 
-def fetch_sigmet(lat, lon):
+def _haversine_nm(lat1, lon1, lat2, lon2):
+    """Great-circle distance in nautical miles between two lat/lon points."""
+    R_nm = 3440.065
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return R_nm * 2 * math.asin(math.sqrt(a))
+
+
+def fetch_sigmet(lat, lon, radius_nm=500):
     resp = requests.get(SIGMET_URL, params={"format": "json"}, timeout=10)
     resp.raise_for_status()
     if not resp.content:
@@ -147,12 +157,21 @@ def fetch_sigmet(lat, lon):
     data = resp.json()
     if not data:
         return []
-    # Filter by proximity to station lat/lon (approx 100nm radius)
     filtered = []
     for item in data:
-        # Items may have lat/lon or we display all if available
-        filtered.append(item)
-    return filtered[:10]  # Limit to 10 most recent
+        s_lat = item.get("lat")
+        s_lon = item.get("lon")
+        if s_lat is not None and s_lon is not None:
+            try:
+                dist = _haversine_nm(lat, lon, float(s_lat), float(s_lon))
+                if dist <= radius_nm:
+                    filtered.append(item)
+            except (ValueError, TypeError):
+                pass
+        else:
+            # No coordinates on this item — include it so national-scope advisories are not silently dropped
+            filtered.append(item)
+    return filtered[:10]
 
 
 
