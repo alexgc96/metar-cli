@@ -164,13 +164,15 @@ def fetch_sigmet(lat, lon, radius_nm=500):
             try:
                 c_lat = sum(c["lat"] for c in coords) / len(coords)
                 c_lon = sum(c["lon"] for c in coords) / len(coords)
-                if _haversine_nm(lat, lon, c_lat, c_lon) <= radius_nm:
-                    filtered.append(item)
+                dist = _haversine_nm(lat, lon, c_lat, c_lon)
+                if dist <= radius_nm:
+                    filtered.append((dist, item))
             except (KeyError, TypeError, ZeroDivisionError):
-                filtered.append(item)
+                filtered.append((float("inf"), item))
         else:
-            filtered.append(item)
-    return filtered[:10]
+            filtered.append((float("inf"), item))
+    filtered.sort(key=lambda x: x[0])
+    return [item for _, item in filtered[:10]]
 
 
 
