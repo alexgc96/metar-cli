@@ -159,17 +159,16 @@ def fetch_sigmet(lat, lon, radius_nm=500):
         return []
     filtered = []
     for item in data:
-        s_lat = item.get("lat")
-        s_lon = item.get("lon")
-        if s_lat is not None and s_lon is not None:
+        coords = item.get("coords") or []
+        if coords:
             try:
-                dist = _haversine_nm(lat, lon, float(s_lat), float(s_lon))
-                if dist <= radius_nm:
+                c_lat = sum(c["lat"] for c in coords) / len(coords)
+                c_lon = sum(c["lon"] for c in coords) / len(coords)
+                if _haversine_nm(lat, lon, c_lat, c_lon) <= radius_nm:
                     filtered.append(item)
-            except (ValueError, TypeError):
-                pass
+            except (KeyError, TypeError, ZeroDivisionError):
+                filtered.append(item)
         else:
-            # No coordinates on this item — include it so national-scope advisories are not silently dropped
             filtered.append(item)
     return filtered[:10]
 
