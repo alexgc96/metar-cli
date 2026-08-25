@@ -139,7 +139,17 @@ def fetch_taf(icao):
     return data[0] if data else None
 
 
-def fetch_sigmet(lat, lon):
+def _haversine_nm(lat1, lon1, lat2, lon2):
+    """Great-circle distance in nautical miles between two lat/lon points."""
+    R_nm = 3440.065
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    return R_nm * 2 * math.asin(math.sqrt(a))
+
+
+def fetch_sigmet(lat, lon, radius_nm=500):
     resp = requests.get(SIGMET_URL, params={"format": "json"}, timeout=10)
     resp.raise_for_status()
     if not resp.content:
@@ -147,12 +157,20 @@ def fetch_sigmet(lat, lon):
     data = resp.json()
     if not data:
         return []
-    # Filter by proximity to station lat/lon (approx 100nm radius)
     filtered = []
     for item in data:
-        # Items may have lat/lon or we display all if available
-        filtered.append(item)
-    return filtered[:10]  # Limit to 10 most recent
+        coords = item.get("coords") or []
+        if coords:
+            try:
+                c_lat = sum(c["lat"] for c in coords) / len(coords)
+                c_lon = sum(c["lon"] for c in coords) / len(coords)
+                if _haversine_nm(lat, lon, c_lat, c_lon) <= radius_nm:
+                    filtered.append(item)
+            except (KeyError, TypeError, ZeroDivisionError):
+                filtered.append(item)
+        else:
+            filtered.append(item)
+    return filtered[:10]
 
 
 
